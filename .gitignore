@@ -1,0 +1,31 @@
+# Build
+build/
+build*/
+cmake-build*/
+*.o
+*.a
+compile_commands.json
+.cache/
+CMakeCache.txt
+CMakeFiles/
+CTestTestfile.cmake
+Testing/
+
+# Editors
+.vscode/
+.idea/
+.clangd/
+*.swp
+*.swo
+*~
+\#*\#
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+desktop.ini
+
+CLAUDE.md
+
