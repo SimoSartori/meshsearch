@@ -11,6 +11,15 @@ CMakeFiles/
 CTestTestfile.cmake
 Testing/
 
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+dist/
+.venv/
+venv/
+
 # Editors
 .vscode/
 .idea/

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["scikit-build-core >= 0.10", "nanobind >= 2.0"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "meshsearch"
+version = "0.1.0"
+description = "A uniform cubic mesh over a set of points, for neighbour queries"
+readme = "README.md"
+requires-python = ">= 3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "Simone Sartori" }]
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+benchmark = ["pytest", "scipy", "scikit-learn", "psutil"]
+
+[tool.scikit-build]
+minimum-version = "0.10"
+build-dir = "build/{wheel_tag}"
+
+[tool.scikit-build.cmake.define]
+MESHSEARCH_BUILD_PYTHON = "ON"
+MESHSEARCH_BUILD_TESTS = "OFF"
+MESHSEARCH_BUILD_EXAMPLES = "OFF"

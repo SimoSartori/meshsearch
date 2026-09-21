@@ -70,6 +70,38 @@ return codes.
 Const members may be called concurrently on one grid; non-const members may
 not.
 
+## Python
+
+The same grid is available from Python, with snake_case names and numpy
+results. Install from the source tree:
+
+```
+pip install .
+```
+
+```python
+import numpy as np
+import meshsearch
+
+grid = meshsearch.MeshGrid(x, y, z, cellsize)          # three arrays, one cell side
+
+len(grid)                                              # live object count
+grid.lims, grid.n_cells, grid.cellsize                 # read-only properties
+
+grid.nearest_object(0.5, 0.5, 0.5)                     # an index
+grid.nearest_objects(10, 0.5, 0.5, 0.5)                # uint32 array, nearest first
+grid.close_objects(0.5, 0.5, 0.5, 0.15, 0.10)          # uint32 array, a shell
+grid.nearest_objects(5, index)                         # about an object, which is excluded
+```
+
+`meshsearch.Error` derives from `ValueError`. `meshsearch.IndexError` derives
+from both `meshsearch.Error` and Python's `IndexError`, mirroring the C++
+hierarchy, so an index fault can be caught either as the Python type it stands
+for or along with every other error the grid raises.
+
+Run the Python tests with `pytest tests/test_meshgrid.py` against an installed
+build.
+
 ## Licence
 
 BSD 3-Clause; see `LICENSE`.
