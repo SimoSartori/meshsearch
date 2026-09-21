@@ -179,10 +179,16 @@ namespace meshsearch {
 
   protected:
 
-    /// Coordinates, indexed by object index; entries of removed objects persist.
+    /// Coordinates in cell order, so that a cell's objects are contiguous;
+    /// indexed by internal index, not by object index. Entries of removed
+    /// objects persist.
     std::vector<double> m_X, m_Y, m_Z;
 
-    /// Per object, whether it is still in the grid.
+    /// Object index to internal index, and internal index back to object
+    /// index. Only the object index is ever public.
+    std::vector<unsigned int> m_toInternal, m_toPublic;
+
+    /// Per object, whether it is still in the grid; indexed by object index.
     std::vector<char> m_alive;
 
     /// Count of live objects, maintained by removeObject and addObject.
@@ -201,7 +207,8 @@ namespace meshsearch {
     /// only on m_nCells, so copies of the grid share it.
     std::shared_ptr<const std::vector<std::vector<GridOffset>>> m_mask;
 
-    /// Live object indices per cell, addressed by getLinearIndex.
+    /// Live internal indices per cell, addressed by getLinearIndex. A cell's
+    /// entries are a contiguous ascending range until objects are added.
     std::vector<std::vector<unsigned int>> m_grid;
 
     /// Cell coordinates to linear cell index.

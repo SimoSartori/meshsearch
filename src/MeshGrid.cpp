@@ -86,18 +86,15 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
   if (!(cellsize > 0.))
     throw Error("cellsize must be positive");
 
-  m_X = X;
-  m_Y = Y;
-  m_Z = Z;
   m_cellsize = cellsize;
 
   std::vector<std::vector<double>> temp_lims(3, std::vector<double>(2));
 
   if (limits.empty()) {
-    if (m_X.empty())
+    if (X.empty())
       throw Error("an empty set of coordinates requires explicit limits");
 
-    const std::vector<double>* coords[3] = {&m_X, &m_Y, &m_Z};
+    const std::vector<double>* coords[3] = {&X, &Y, &Z};
     for (int i=0; i<3; ++i) {
       const auto range = std::minmax_element(coords[i]->begin(), coords[i]->end());
       const double lo = *range.first;
@@ -111,8 +108,8 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
     if (limits.size() != 3 || limits[0].size() != 2 || limits[1].size() != 2 || limits[2].size() != 2)
       throw Error("the limits matrix must be 3x2");
 
-    if (!m_X.empty()) {
-      const std::vector<double>* coords[3] = {&m_X, &m_Y, &m_Z};
+    if (!X.empty()) {
+      const std::vector<double>* coords[3] = {&X, &Y, &Z};
       const char* names[3] = {"X", "Y", "Z"};
       for (int i=0; i<3; ++i) {
         const auto range = std::minmax_element(coords[i]->begin(), coords[i]->end());
@@ -171,13 +168,49 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
   const size_t total_cells = size_t(m_nCells[0])*size_t(m_nCells[1])*size_t(m_nCells[2]);
   m_grid.assign(total_cells, std::vector<unsigned int>());
 
-  m_alive.assign(m_X.size(), 1);
-  m_nObjects = static_cast<unsigned int>(m_X.size());
+  const size_t n = X.size();
 
-  for (size_t i=0; i<m_X.size(); ++i) {
-    const auto coords = locate(m_lims, m_nCells, m_cellsize, m_X[i], m_Y[i], m_Z[i]);
-    m_grid[getLinearIndex(coords[0], coords[1], coords[2])].push_back(static_cast<unsigned int>(i));
+  std::vector<size_t> cell(n);
+  std::vector<size_t> offset(total_cells+1, 0);
+
+  for (size_t i=0; i<n; ++i) {
+    const auto coords = locate(m_lims, m_nCells, m_cellsize, X[i], Y[i], Z[i]);
+    cell[i] = getLinearIndex(coords[0], coords[1], coords[2]);
+    offset[cell[i]+1]++;
   }
+
+  for (size_t c=0; c<total_cells; ++c) offset[c+1] += offset[c];
+
+  m_toPublic.resize(n);
+  m_toInternal.resize(n);
+
+  for (size_t i=0; i<n; ++i) {
+    const size_t internal = offset[cell[i]]++;
+    m_toPublic[internal] = static_cast<unsigned int>(i);
+    m_toInternal[i] = static_cast<unsigned int>(internal);
+  }
+
+  m_X.resize(n);
+  m_Y.resize(n);
+  m_Z.resize(n);
+
+  for (size_t k=0; k<n; ++k) {
+    const unsigned int index = m_toPublic[k];
+    m_X[k] = X[index];
+    m_Y[k] = Y[index];
+    m_Z[k] = Z[index];
+  }
+
+  size_t start = 0;
+  for (size_t c=0; c<total_cells; ++c) {
+    const size_t end = offset[c];
+    m_grid[c].reserve(end-start);
+    for (size_t k=start; k<end; ++k) m_grid[c].push_back(static_cast<unsigned int>(k));
+    start = end;
+  }
+
+  m_alive.assign(n, 1);
+  m_nObjects = static_cast<unsigned int>(n);
 }
 
 
@@ -282,7 +315,7 @@ unsigned int meshsearch::MeshGrid::nearestObject (const double X, const double Y
   if (finalInd == std::numeric_limits<unsigned int>::max())
     throw Error("no object found");
 
-  return finalInd;
+  return m_toPublic[finalInd];
 }
 
 
@@ -294,9 +327,10 @@ unsigned int meshsearch::MeshGrid::nearestObject (const unsigned int index) cons
   checkIndex(m_alive, index);
   if (m_nObjects < 2) throw Error("no other object remains in the grid");
 
-  const double X = m_X[index];
-  const double Y = m_Y[index];
-  const double Z = m_Z[index];
+  const unsigned int self = m_toInternal[index];
+  const double X = m_X[self];
+  const double Y = m_Y[self];
+  const double Z = m_Z[self];
 
   const auto target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
   const int targetX = static_cast<int>(target[0]);
@@ -321,7 +355,7 @@ unsigned int meshsearch::MeshGrid::nearestObject (const unsigned int index) cons
       const int currZ = targetZ+offset.k;
       if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
         for (const auto& part_idx : m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))]) {
-          if (part_idx == index) continue;
+          if (part_idx == self) continue;
           const double dx = m_X[part_idx]-X;
           const double dy = m_Y[part_idx]-Y;
           const double dz = m_Z[part_idx]-Z;
@@ -339,7 +373,7 @@ unsigned int meshsearch::MeshGrid::nearestObject (const unsigned int index) cons
   if (finalInd == std::numeric_limits<unsigned int>::max())
     throw Error("no object found");
 
-  return finalInd;
+  return m_toPublic[finalInd];
 }
 
 
@@ -393,7 +427,7 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
 
   std::vector<unsigned int> finalInd(pq.size());
   for (size_t i=finalInd.size(); i-- > 0; ) {
-    finalInd[i] = pq.top().index;
+    finalInd[i] = m_toPublic[pq.top().index];
     pq.pop();
   }
 
@@ -411,9 +445,10 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
   if (N >= m_nObjects) throw Error("N is larger than the number of available neighbours");
   if (N == 0) return {};
 
-  const double X = m_X[index];
-  const double Y = m_Y[index];
-  const double Z = m_Z[index];
+  const unsigned int self = m_toInternal[index];
+  const double X = m_X[self];
+  const double Y = m_Y[self];
+  const double Z = m_Z[self];
 
   const auto target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
   const int targetX = static_cast<int>(target[0]);
@@ -439,7 +474,7 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
       const int currZ = targetZ+offset.k;
       if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
         for (const auto& part_idx : m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))]) {
-          if (part_idx == index) continue;
+          if (part_idx == self) continue;
           const double dx = m_X[part_idx]-X;
           const double dy = m_Y[part_idx]-Y;
           const double dz = m_Z[part_idx]-Z;
@@ -457,7 +492,7 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
 
   std::vector<unsigned int> finalInd(pq.size());
   for (size_t i=finalInd.size(); i-- > 0; ) {
-    finalInd[i] = pq.top().index;
+    finalInd[i] = m_toPublic[pq.top().index];
     pq.pop();
   }
 
@@ -517,6 +552,8 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const double X, co
     }
   }
 
+  for (auto& part_idx : finalInd) part_idx = m_toPublic[part_idx];
+
   return finalInd;
 }
 
@@ -530,9 +567,10 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const unsigned int
   checkIndex(m_alive, index);
   checkRadii(Rmax, Rmin);
 
-  const double X = m_X[index];
-  const double Y = m_Y[index];
-  const double Z = m_Z[index];
+  const unsigned int self = m_toInternal[index];
+  const double X = m_X[self];
+  const double Y = m_Y[self];
+  const double Z = m_Z[self];
 
   const double Rmax_sq = Rmax*Rmax;
   const double Rmin_sq = Rmin*Rmin;
@@ -568,7 +606,7 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const unsigned int
       const int currZ = targetZ+offset.k;
       if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
         for (const auto& part_idx : m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))]) {
-          if (part_idx == index) continue;
+          if (part_idx == self) continue;
           const double dx = m_X[part_idx]-X;
           const double dy = m_Y[part_idx]-Y;
           const double dz = m_Z[part_idx]-Z;
@@ -578,6 +616,8 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const unsigned int
       }
     }
   }
+
+  for (auto& part_idx : finalInd) part_idx = m_toPublic[part_idx];
 
   return finalInd;
 }
@@ -608,7 +648,11 @@ std::array<unsigned int, 3> meshsearch::MeshGrid::get_CellCoords (const double X
 std::vector<unsigned int> meshsearch::MeshGrid::get_ObjectsInCell (const double X, const double Y, const double Z) const
 {
   const auto coords = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
-  return m_grid[getLinearIndex(coords[0], coords[1], coords[2])];
+  std::vector<unsigned int> objects = m_grid[getLinearIndex(coords[0], coords[1], coords[2])];
+
+  for (auto& part_idx : objects) part_idx = m_toPublic[part_idx];
+
+  return objects;
 }
 
 
@@ -619,9 +663,11 @@ void meshsearch::MeshGrid::removeObject (const unsigned int index)
 {
   checkIndex(m_alive, index);
 
-  const auto coords = locate(m_lims, m_nCells, m_cellsize, m_X[index], m_Y[index], m_Z[index]);
+  const unsigned int internal = m_toInternal[index];
+
+  const auto coords = locate(m_lims, m_nCells, m_cellsize, m_X[internal], m_Y[internal], m_Z[internal]);
   auto& cell = m_grid[getLinearIndex(coords[0], coords[1], coords[2])];
-  cell.erase(std::remove(cell.begin(), cell.end(), index), cell.end());
+  cell.erase(std::remove(cell.begin(), cell.end(), internal), cell.end());
 
   m_alive[index] = 0;
   m_nObjects--;
@@ -635,15 +681,18 @@ unsigned int meshsearch::MeshGrid::addObject (const double X, const double Y, co
 {
   const auto coords = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
 
-  const unsigned int index = static_cast<unsigned int>(m_X.size());
+  const unsigned int index = static_cast<unsigned int>(m_toInternal.size());
+  const unsigned int internal = static_cast<unsigned int>(m_X.size());
 
   m_X.push_back(X);
   m_Y.push_back(Y);
   m_Z.push_back(Z);
+  m_toInternal.push_back(internal);
+  m_toPublic.push_back(index);
   m_alive.push_back(1);
   m_nObjects++;
 
-  m_grid[getLinearIndex(coords[0], coords[1], coords[2])].push_back(index);
+  m_grid[getLinearIndex(coords[0], coords[1], coords[2])].push_back(internal);
 
   return index;
 }
