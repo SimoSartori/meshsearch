@@ -597,6 +597,104 @@ namespace {
   // The load-bearing group: every query kind against brute force over several
   // thousand random points, at three cell sizes relative to the mean
   // separation. This is what establishes that the geometry is right, rather
+  // The Rmax layer bound, swept across the ratio that drives it. A layer L
+  // guarantees a minimum distance of L cell sides, so the bound scans layers 0
+  // to floor(Rmax/cellsize) and no further. The ratio is what decides how many
+  // layers that is, so it is what has to be swept: from a shell far inside one
+  // cell to one several cells wide, against brute force at each step.
+  void testShellRadiusSweep ()
+  {
+    const std::vector<std::vector<double>> lims = {{0., 1.}, {0., 1.}, {0., 1.}};
+    std::mt19937 gen(99u);
+    const Cloud cloud = uniformCloud(1500, gen);
+
+    const double ratios[] = {0.05, 0.1, 0.25, 0.4, 0.5, 0.75, 0.99, 1., 1.01,
+                             1.25, 1.5, 1.75, 2., 2.25, 2.5, 3., 4., 5.5, 8.};
+    const double cellsizes[] = {0.3, 0.12, 0.05};
+
+    std::uniform_real_distribution<double> unit(0., 1.);
+    std::uniform_int_distribution<unsigned int> pick(0, 1499);
+
+    for (const double cellsize : cellsizes) {
+      const MeshGrid grid(cloud.X, cloud.Y, cloud.Z, cellsize, lims);
+
+      for (const double ratio : ratios) {
+        const double Rmax = ratio*cellsize;
+
+        for (int q=0; q<6; ++q) {
+          const double x = unit(gen), y = unit(gen), z = unit(gen);
+          checkShell(grid, cloud, x, y, z, Rmax, 0., -1);
+          checkShell(grid, cloud, x, y, z, Rmax, 0.5*Rmax, -1);
+
+          const unsigned int index = pick(gen);
+          checkShell(grid, cloud, cloud.X[index], cloud.Y[index], cloud.Z[index],
+                     Rmax, 0., (long)index);
+          checkShell(grid, cloud, cloud.X[index], cloud.Y[index], cloud.Z[index],
+                     Rmax, 0.5*Rmax, (long)index);
+        }
+      }
+    }
+
+    printf("  shell radius swept across cell sides: ok\n");
+  }
+
+
+  // The tightest configurations the Rmax bound admits: an object sitting in
+  // the very last layer the bound scans, at exactly the shell's outer edge.
+  // Random data does not produce these, and one layer tighter loses every one
+  // of them.
+  //
+  // Cellsize is 1, so a layer index is a distance in cell sides. Every
+  // coordinate below is exact in binary, so the boundary comparisons are not
+  // decided by rounding.
+  void testTightestScannedLayer ()
+  {
+    const std::vector<std::vector<double>> lims = {{0., 20.}, {0., 20.}, {0., 20.}};
+
+    auto sorted = [](std::vector<unsigned int> v) {
+      std::sort(v.begin(), v.end());
+      return v;
+    };
+
+    // The query point sits 0.75 into cell 10 at x = 10.75. The object sits at
+    // x = 13, the low corner of cell 13: an offset of 3, per-axis gap 3-1 = 2,
+    // layer floor(sqrt(4)) = 2. Their distance is 2.25, and that is the
+    // closest an object in any layer-2 cell can be to this query point.
+    // Rmax = 2.25 makes floor(Rmax/cellsize) = 2, so layer 2 is the last one
+    // scanned and the object lies exactly on the outer edge.
+    {
+      const MeshGrid grid({10.75, 13.}, {10.5, 10.5}, {10.5, 10.5}, 1., lims);
+      assert(grid.get_CellCoords(10.75, 10.5, 10.5)[0] == 10);
+      assert(grid.get_CellCoords(13., 10.5, 10.5)[0] == 13);
+      assert(sorted(grid.closeObjects(10.75, 10.5, 10.5, 2.25)) == std::vector<unsigned int>({0, 1}));
+      assert(sorted(grid.closeObjects(0u, 2.25)) == std::vector<unsigned int>({1}));
+      assert(grid.closeObjects(0u, 2.25, 2.25).size() == 1);
+      // a hair inside the edge and the object is correctly out of the shell
+      assert(grid.closeObjects(0u, 2.2421875).empty());
+    }
+
+    // The same at layer 4: offset 5, gap 4, distance 4.25 from x = 10.75 to
+    // x = 15, with Rmax = 4.25 so floor(Rmax/cellsize) = 4.
+    {
+      const MeshGrid grid({10.75, 15.}, {10.5, 10.5}, {10.5, 10.5}, 1., lims);
+      assert(sorted(grid.closeObjects(0u, 4.25)) == std::vector<unsigned int>({1}));
+      assert(grid.closeObjects(0u, 4.25, 4.25).size() == 1);
+    }
+
+    // Off axis, where all three gaps contribute: offset (3,3,3), gaps (2,2,2),
+    // layer floor(sqrt(12)) = 3, distance 2.25*sqrt(3) = 3.897. Rmax = 3.9375
+    // keeps floor(Rmax/cellsize) = 3, so layer 3 is again the last scanned.
+    {
+      const MeshGrid grid({10.75, 13.}, {10.75, 13.}, {10.75, 13.}, 1., lims);
+      const double d = std::sqrt(3.*2.25*2.25);
+      assert(d > 3. && d < 3.9375);
+      assert(sorted(grid.closeObjects(0u, 3.9375)) == std::vector<unsigned int>({1}));
+    }
+
+    printf("  tightest layer the Rmax bound admits: ok\n");
+  }
+
+
   // than merely self-consistent.
   void testBruteForce ()
   {
@@ -843,6 +941,8 @@ int main ()
   testDuplicates();
   testDegenerateExtents();
   testWideShells();
+  testShellRadiusSweep();
+  testTightestScannedLayer();
   testBruteForce();
 
   printf("all tests passed\n");

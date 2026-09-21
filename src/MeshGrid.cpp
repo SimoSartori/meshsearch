@@ -489,7 +489,7 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const double X, co
 
   const double mask_size = static_cast<double>(m_mask->size());
 
-  const double upper = std::ceil(Rmax*inv_cellsize)+3.;
+  const double upper = std::floor(Rmax/m_cellsize)+1.;
   const unsigned int max_mask_idx = static_cast<unsigned int>((upper < mask_size) ? upper : mask_size);
 
   const double lower = std::floor(Rmin*inv_cellsize)-4.;
@@ -498,10 +498,8 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const double X, co
   std::vector<unsigned int> finalInd;
 
   for (unsigned int maskInd=min_mask_idx; maskInd<max_mask_idx; maskInd++) {
-    if (maskInd > 4) {
-      const double min_shell_dist = (maskInd-3.)*m_cellsize;
-      if (min_shell_dist*min_shell_dist > Rmax_sq) break;
-    }
+    const double layer_dist = maskInd*m_cellsize;
+    if (layer_dist*layer_dist > Rmax_sq) break;
 
     for (const auto& offset : (*m_mask)[maskInd]) {
       const int currX = targetX+offset.i;
@@ -552,7 +550,7 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const unsigned int
 
   const double mask_size = static_cast<double>(m_mask->size());
 
-  const double upper = std::ceil(Rmax*inv_cellsize)+3.;
+  const double upper = std::floor(Rmax/m_cellsize)+1.;
   const unsigned int max_mask_idx = static_cast<unsigned int>((upper < mask_size) ? upper : mask_size);
 
   const double lower = std::floor(Rmin*inv_cellsize)-4.;
@@ -561,10 +559,8 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const unsigned int
   std::vector<unsigned int> finalInd;
 
   for (unsigned int maskInd=min_mask_idx; maskInd<max_mask_idx; maskInd++) {
-    if (maskInd > 4) {
-      const double min_shell_dist = (maskInd-3.)*m_cellsize;
-      if (min_shell_dist*min_shell_dist > Rmax_sq) break;
-    }
+    const double layer_dist = maskInd*m_cellsize;
+    if (layer_dist*layer_dist > Rmax_sq) break;
 
     for (const auto& offset : (*m_mask)[maskInd]) {
       const int currX = targetX+offset.i;
