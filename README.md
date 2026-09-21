@@ -22,8 +22,8 @@ cmake --build build
 ```
 
 That produces the static library `libmeshsearch.a`, the test binary and the
-example. Verified on macOS with AppleClang 15 and with GCC 13, 14, 15 and 16;
-the code is portable to Linux but has not been run there.
+example. CI configures, builds and tests on Ubuntu and macOS on every push;
+locally it is also built with GCC 13, 14, 15 and 16, and with AppleClang 15.
 
 A version of this code is distributed as part of the
 [CosmoBolognaLib](https://github.com/federicomarulli/CosmoBolognaLib)
