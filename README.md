@@ -1,4 +1,5 @@
 # meshsearch
+Author: Simone Sartori (simone.sartori@inaf.it, simosart23@gmail.com)
 
 A uniform cubic mesh over a set of points in three dimensions, for neighbour
 queries: the object nearest a point, the N nearest, and every object in a
@@ -23,6 +24,11 @@ cmake --build build
 That produces the static library `libmeshsearch.a`, the test binary and the
 example. Verified on macOS with AppleClang 15 and with GCC 13, 14, 15 and 16;
 the code is portable to Linux but has not been run there.
+
+A version of this code is distributed as part of the
+[CosmoBolognaLib](https://github.com/federicomarulli/CosmoBolognaLib)
+(Marulli, Veropalumbo & Moresco 2016, A&C, 14, 35), where it was
+originally developed.
 
 ## Tests
 

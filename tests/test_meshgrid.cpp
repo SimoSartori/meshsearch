@@ -1,3 +1,11 @@
+// Tests for meshsearch::MeshGrid. They check the guarantees stated in
+// include/meshsearch/MeshGrid.h, not the implementation behind them, so a
+// rewrite of the internals should leave this file passing unchanged.
+//
+// The load-bearing groups are the ones that compare every query against brute
+// force over random points. NDEBUG is undefined below so that assert() stays
+// live whatever the build type.
+
 #undef NDEBUG
 
 #include "meshsearch/MeshGrid.h"
@@ -49,6 +57,10 @@ namespace {
 
   const double tol = 1.e-9;
 
+  // The brute-force reference: the same points the grid holds, plus which of
+  // them are still alive, so an expected answer can be recomputed by scanning
+  // all of them. Throughout, a `skip` of -1 means a query about a free point
+  // and a skip >= 0 means a query about that object, which is then excluded.
   struct Cloud {
     std::vector<double> X, Y, Z;
     std::vector<char> alive;
@@ -87,6 +99,8 @@ namespace {
     }
   };
 
+  // n points spread uniformly through the unit box, from a seeded generator so
+  // that a failure is reproducible.
   Cloud uniformCloud (const size_t n, std::mt19937& gen)
   {
     std::uniform_real_distribution<double> unit(0., 1.);
@@ -104,6 +118,10 @@ namespace {
   // -----------------------------------------------------------------------
 
 
+  // nearestObject must return an object at the minimum distance. It compares
+  // distances, not indices: with duplicate or coincident points several
+  // objects tie for nearest and the header promises no particular one, so
+  // asserting a specific index would be asserting an implementation detail.
   void checkNearest (const MeshGrid& grid, const Cloud& cloud,
                      const double x, const double y, const double z, const long skip)
   {
@@ -123,6 +141,9 @@ namespace {
   }
 
 
+  // nearestObjects must return exactly N live objects, nearest first, without
+  // repeats and without the query object. Compared distance by distance
+  // against the brute-force ranking, for the tie reason above.
   void checkNearestN (const MeshGrid& grid, const Cloud& cloud, const unsigned int N,
                       const double x, const double y, const double z, const long skip)
   {
@@ -147,6 +168,10 @@ namespace {
   }
 
 
+  // closeObjects must return exactly the brute-force shell membership. Here
+  // the comparison is on the index sets and is exact: membership is a decision
+  // about each object, not a choice between equals, so nothing may be missing
+  // or extra. Order is unspecified, so both sides are sorted first.
   void checkShell (const MeshGrid& grid, const Cloud& cloud,
                    const double x, const double y, const double z,
                    const double Rmax, const double Rmin, const long skip)
@@ -163,6 +188,10 @@ namespace {
   // -----------------------------------------------------------------------
 
 
+  // The constructor's contract: the accessors report what was built, each side
+  // of the box is grown symmetrically to a whole number of cells, a copy
+  // answers as the original does, and a default-constructed grid raises or
+  // returns empty from every member.
   void testConstruction ()
   {
     const std::vector<double> X = {0.5, 2.5, 9.5};
@@ -225,6 +254,8 @@ namespace {
   }
 
 
+  // get_Cell, get_CellCoords and get_ObjectsInCell over the whole grid, and
+  // the box's closed upper end.
   void testCells ()
   {
     const std::vector<double> X = {0.5}, Y = {0.5}, Z = {0.5};
@@ -238,10 +269,16 @@ namespace {
     assert(first[0] == 0 && first[1] == 0 && first[2] == 0);
     assert(grid.get_Cell(0., 0., 0.) == 0);
 
+    // The upper face. The box is closed at both ends, so (10,4,2), the far
+    // corner, exactly on the upper face of all three axes, is inside it and
+    // must be accepted. Dividing by the cellsize there gives 10, 4 and 2,
+    // which are one past the last cell on each axis, so the point belongs to
+    // the last cell, (9,3,1), and not to a cell that does not exist.
     const auto last = grid.get_CellCoords(10., 4., 2.);
     assert(last[0] == 9 && last[1] == 3 && last[2] == 1);
     assert(grid.get_Cell(10., 4., 2.) == 9*4*2+3*2+1);
 
+    // One axis at a time, in case an axis is handled separately.
     const auto edgeX = grid.get_CellCoords(10., 0.5, 0.5);
     assert(edgeX[0] == 9);
     const auto edgeY = grid.get_CellCoords(0.5, 4., 0.5);
@@ -252,6 +289,9 @@ namespace {
     const auto mid = grid.get_CellCoords(3.7, 2.2, 1.5);
     assert(mid[0] == 3 && mid[1] == 2 && mid[2] == 1);
 
+    // Walk every cell centre: the coordinates must round-trip, and the linear
+    // index must be in range and distinct for every cell, so no two cells
+    // share a slot and none is unreachable.
     const size_t total = size_t(grid.get_nCells()[0])*grid.get_nCells()[1]*grid.get_nCells()[2];
     std::vector<int> seen(total, 0);
     for (unsigned int ix=0; ix<grid.get_nCells()[0]; ++ix)
@@ -272,6 +312,8 @@ namespace {
     assert(inCell.size() == 1 && inCell[0] == 0);
     assert(grid.get_ObjectsInCell(5.5, 2.5, 1.5).empty());
 
+    // Same thing through addObject and a query: an object added exactly on the
+    // far corner of the box must land in the last cell and be findable there.
     MeshGrid onFace({0.}, {0.}, {0.}, 1., {{0., 3.}, {0., 3.}, {0., 3.}});
     const unsigned int corner = onFace.addObject(3., 3., 3.);
     const auto cell = onFace.get_ObjectsInCell(3., 3., 3.);
@@ -284,6 +326,10 @@ namespace {
   }
 
 
+  // Every @throw the header documents actually throws, and the type is the
+  // documented one: IndexError for an index that is out of range or removed,
+  // plain Error for everything else, including an out-of-range N, which is a
+  // count and not an index.
   void testThrows ()
   {
     const std::vector<double> X = {1., 2., 3.};
@@ -407,6 +453,10 @@ namespace {
   }
 
 
+  // Index stability: removing an object leaves every other index valid and its
+  // own permanently invalid, adding issues an index one past the highest ever
+  // issued and never reuses a removed one, get_nObjects tracks both, and
+  // queries keep agreeing with brute force across the changes.
   void testIndexStability ()
   {
     std::mt19937 gen(20250921u);
@@ -501,6 +551,11 @@ namespace {
   }
 
 
+  // Construction with no limits, where the padding proportional to the data
+  // extent has nothing to be proportional to: a single point, a wholly
+  // coincident cloud, a flat one, and clouds with extreme extent or offset
+  // must all still yield a grid of at least one cell per axis that answers
+  // correctly.
   void testDegenerateExtents ()
   {
     const MeshGrid single({3.}, {4.}, {5.}, 0.7);
@@ -539,6 +594,10 @@ namespace {
     printf("  degenerate and extreme extents: ok\n");
   }
 
+  // The load-bearing group: every query kind against brute force over several
+  // thousand random points, at three cell sizes relative to the mean
+  // separation. This is what establishes that the geometry is right, rather
+  // than merely self-consistent.
   void testBruteForce ()
   {
     const std::vector<std::vector<double>> lims = {{0., 1.}, {0., 1.}, {0., 1.}};
@@ -594,6 +653,9 @@ namespace {
   }
 
 
+  // closeObjects at large Rmin, where the scan may start past the innermost
+  // mask layers. Random shells first, then the one configuration that random
+  // data does not reach (explained at the point it is built).
   void testWideShells ()
   {
     const std::vector<std::vector<double>> lims = {{0., 1.}, {0., 1.}, {0., 1.}};
@@ -617,6 +679,29 @@ namespace {
       }
     }
 
+    // The layer-skip case, built by hand because random shells do not produce
+    // it. A shell query starts its scan some layers out, and how many it may
+    // skip has to be derived from Rmin. A mask layer L records a cell's
+    // *minimum* distance from the target cell and says nothing about its
+    // maximum, so a bound that skips too eagerly can skip a cell that still
+    // reaches into the shell.
+    //
+    // Cellsize is 1. The query point (10,10,10) sits exactly on the low corner
+    // of cell (10,10,10). The second object sits just inside cell (16,16,16),
+    // a hair short of its far corner at (17,17,17); the 1e-9 keeps it in that
+    // cell rather than the next one.
+    //
+    // That is an offset of (6,6,6) from the target cell, so the per-axis gaps
+    // are 6-1 = 5 and the layer is floor(sqrt(75)) = 8: the mask guarantees
+    // only that the cell is at least 8.660 cellsize away, while its far corner
+    // is at 7*sqrt(3) = 12.124. With Rmin = 12 a bound skipping every layer
+    // below floor(12/1) - 3 = 9 skips layer 8, and this object with it. The
+    // bound the library uses subtracts 4 instead, so the scan starts at layer
+    // 8 and finds it.
+    //
+    // The failure needs the query point in one corner of its cell and the
+    // object in the opposite corner of a diagonally offset cell, which is why
+    // the random shells above never hit it.
     Cloud corner;
     corner.X = {10., 17.-1.e-9};
     corner.Y = {10., 17.-1.e-9};
@@ -632,6 +717,9 @@ namespace {
     checkShell(corner_grid, corner, 10., 10., 10., 12.2, 12., 0);
     assert(corner_grid.closeObjects(0u, 12.2, 12.).size() == 1);
 
+    // Then sweep the same two points across shells from Rmin 2 to 20 and
+    // widths up to 11.5, so every layer-skip arithmetic a shell can produce on
+    // this configuration is exercised, not only the Rmin = 12 case above.
     for (int k=2; k<=20; ++k) {
       const double Rmin = double(k);
       for (int step=0; step<24; ++step) {
@@ -644,6 +732,10 @@ namespace {
   }
 
 
+  // closeObjects' bounds are inclusive at both ends, Rmin <= d <= Rmax, on
+  // hand-placed points whose distances are exact in binary so the boundary is
+  // unambiguous; and the index overload excludes the query object itself but
+  // not other objects coincident with it.
   void testRminBoundary ()
   {
     const std::vector<double> X = {5., 6., 7., 8., 5., 5.};
@@ -683,6 +775,8 @@ namespace {
   }
 
 
+  // The same queries against a cloud where a third of the points duplicate an
+  // earlier one exactly: ties must not cost or duplicate a result.
   void testDuplicates ()
   {
     const std::vector<std::vector<double>> lims = {{0., 1.}, {0., 1.}, {0., 1.}};
