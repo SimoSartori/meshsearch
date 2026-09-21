@@ -534,6 +534,198 @@ def test_an_object_in_the_last_layer_the_rmax_bound_scans():
     assert grid.close_objects(0, 2.2421875).size == 0
 
 
+# --------------------------------------------------------------------------
+# the batched queries, which exist only in Python
+
+
+@pytest.fixture(scope="module")
+def batch_queries():
+    rng = np.random.default_rng(4242)
+    pts = rng.random((250, 3))
+    return (np.ascontiguousarray(pts[:, 0]),
+            np.ascontiguousarray(pts[:, 1]),
+            np.ascontiguousarray(pts[:, 2]))
+
+
+@pytest.mark.parametrize("cellsize", [0.25, 0.08])
+def test_batched_nearest_object_matches_the_loop(points, batch_queries, cellsize):
+    X, Y, Z = points
+    grid = meshsearch.MeshGrid(X, Y, Z, cellsize, BOX)
+    qx, qy, qz = batch_queries
+
+    got = grid.nearest_object(qx, qy, qz)
+    expected = np.array([grid.nearest_object(a, b, c) for a, b, c in zip(qx, qy, qz)],
+                        dtype=np.uint32)
+    assert np.array_equal(got, expected)
+
+
+@pytest.mark.parametrize("cellsize", [0.25, 0.08])
+@pytest.mark.parametrize("n", [1, 8])
+def test_batched_nearest_objects_matches_the_loop(points, batch_queries, cellsize, n):
+    X, Y, Z = points
+    grid = meshsearch.MeshGrid(X, Y, Z, cellsize, BOX)
+    qx, qy, qz = batch_queries
+
+    got = grid.nearest_objects(n, qx, qy, qz)
+    expected = np.array([grid.nearest_objects(n, a, b, c) for a, b, c in zip(qx, qy, qz)],
+                        dtype=np.uint32)
+    assert got.shape == (len(qx), n)
+    assert np.array_equal(got, expected)
+
+
+@pytest.mark.parametrize("cellsize", [0.25, 0.08])
+@pytest.mark.parametrize("rmax,rmin", [(0.1, 0.0), (0.15, 0.08), (0.001, 0.0)])
+def test_batched_close_objects_matches_the_loop(points, batch_queries, cellsize, rmax, rmin):
+    X, Y, Z = points
+    grid = meshsearch.MeshGrid(X, Y, Z, cellsize, BOX)
+    qx, qy, qz = batch_queries
+
+    indices, offsets = grid.close_objects(qx, qy, qz, rmax, rmin)
+    for i, (a, b, c) in enumerate(zip(qx, qy, qz)):
+        assert np.array_equal(indices[offsets[i]:offsets[i + 1]],
+                              grid.close_objects(a, b, c, rmax, rmin))
+
+
+def test_csr_invariants(grids, batch_queries):
+    qx, qy, qz = batch_queries
+    for rmax in (0.001, 0.05, 0.2):
+        indices, offsets = grids["matched"].close_objects(qx, qy, qz, rmax)
+
+        assert len(offsets) == len(qx) + 1
+        assert offsets[0] == 0
+        assert offsets[-1] == len(indices)
+        assert np.all(np.diff(offsets.astype(np.int64)) >= 0)
+
+        # a query with no results is an empty slice, never a missing entry
+        counts = np.diff(offsets)
+        for i in np.flatnonzero(counts == 0):
+            assert indices[offsets[i]:offsets[i + 1]].size == 0
+
+
+def test_csr_counts_come_from_np_diff(grids, batch_queries):
+    qx, qy, qz = batch_queries
+    indices, offsets = grids["matched"].close_objects(qx, qy, qz, 0.1)
+    per_query = np.diff(offsets)
+    assert per_query.sum() == len(indices)
+    assert np.array_equal(
+        per_query,
+        [grids["matched"].close_objects(a, b, c, 0.1).size for a, b, c in zip(qx, qy, qz)])
+
+
+def test_batched_results_are_uint32(grids, batch_queries):
+    qx, qy, qz = batch_queries
+    grid = grids["matched"]
+    indices, offsets = grid.close_objects(qx, qy, qz, 0.1)
+    for array in (grid.nearest_object(qx, qy, qz),
+                  grid.nearest_objects(4, qx, qy, qz),
+                  indices, offsets):
+        assert isinstance(array, np.ndarray)
+        assert array.dtype == np.uint32
+
+
+def test_an_empty_query_array(grids):
+    grid = grids["matched"]
+    empty = np.empty(0)
+
+    assert grid.nearest_object(empty, empty, empty).shape == (0,)
+    assert grid.nearest_objects(4, empty, empty, empty).shape == (0, 4)
+
+    indices, offsets = grid.close_objects(empty, empty, empty, 0.1)
+    assert indices.shape == (0,)
+    assert offsets.shape == (1,)          # n_query + 1
+    assert offsets[0] == 0
+
+
+def test_a_single_point_array_is_still_the_batched_path(grids):
+    grid = grids["matched"]
+    one = np.array([0.5])
+    got = grid.nearest_object(one, one, one)
+    assert isinstance(got, np.ndarray) and got.shape == (1,)
+    assert got[0] == grid.nearest_object(0.5, 0.5, 0.5)
+
+
+def test_scalar_calls_are_unaffected_by_the_overload(grids):
+    grid = grids["matched"]
+    assert isinstance(grid.nearest_object(0.5, 0.5, 0.5), int)
+    assert grid.nearest_objects(3, 0.5, 0.5, 0.5).shape == (3,)
+    assert grid.close_objects(0.5, 0.5, 0.5, 0.1).ndim == 1
+
+
+def test_the_index_overloads_have_no_batched_form(grids):
+    """Their input is one index, so there is no boundary cost to amortise."""
+    grid = grids["matched"]
+    indices = np.array([0, 1, 2], dtype=np.uint32)
+    for call in (lambda: grid.nearest_object(indices),
+                 lambda: grid.nearest_objects(3, indices),
+                 lambda: grid.close_objects(indices, 0.1)):
+        with pytest.raises(TypeError):
+            call()
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda g, bad, y, z: g.nearest_object(bad, y, z),
+        lambda g, bad, y, z: g.nearest_objects(3, bad, y, z),
+        lambda g, bad, y, z: g.close_objects(bad, y, z, 0.1),
+    ],
+)
+def test_a_batched_call_raises_naming_the_query(grids, batch_queries, call):
+    qx, qy, qz = batch_queries
+    bad = qx.copy()
+    bad[17] = 5.0                                  # outside the box
+
+    with pytest.raises(meshsearch.Error) as caught:
+        call(grids["matched"], bad, qy, qz)
+    assert "query 17" in str(caught.value)
+
+
+def test_a_batched_call_raises_on_the_first_bad_query(grids, batch_queries):
+    qx, qy, qz = batch_queries
+    bad = qx.copy()
+    bad[9] = 5.0
+    bad[40] = 5.0
+
+    with pytest.raises(meshsearch.Error) as caught:
+        grids["matched"].nearest_object(bad, qy, qz)
+    assert "query 9" in str(caught.value)
+
+
+def test_a_bad_radius_still_raises_in_a_batched_call(grids, batch_queries):
+    qx, qy, qz = batch_queries
+    for rmax, rmin in [(-1.0, 0.0), (1.0, 2.0), (float("nan"), 0.0)]:
+        with pytest.raises(meshsearch.Error):
+            grids["matched"].close_objects(qx, qy, qz, rmax, rmin)
+
+
+def test_mismatched_query_array_lengths_raise(grids, batch_queries):
+    qx, qy, qz = batch_queries
+    grid = grids["matched"]
+    with pytest.raises(meshsearch.Error):
+        grid.nearest_object(qx[:-1], qy, qz)
+    with pytest.raises(meshsearch.Error):
+        grid.nearest_objects(3, qx, qy[:-1], qz)
+    with pytest.raises(meshsearch.Error):
+        grid.close_objects(qx, qy, qz[:-1], 0.1)
+
+
+def test_batched_queries_see_removals(points, batch_queries):
+    X, Y, Z = points
+    grid = meshsearch.MeshGrid(X, Y, Z, 0.08, BOX)
+    qx, qy, qz = batch_queries
+
+    before = grid.nearest_object(qx, qy, qz)
+    for index in np.unique(before)[:20]:
+        grid.remove_object(int(index))
+    after = grid.nearest_object(qx, qy, qz)
+
+    assert np.array_equal(
+        after,
+        np.array([grid.nearest_object(a, b, c) for a, b, c in zip(qx, qy, qz)],
+                 dtype=np.uint32))
+    assert all(grid.is_alive(int(i)) for i in after)
+
+
 def test_a_wide_shell_at_large_rmin():
     # the configuration random data does not reach: the query point on the low
     # corner of its cell and the object just inside the far corner of the cell

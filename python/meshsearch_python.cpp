@@ -14,8 +14,11 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
+#include <algorithm>
 #include <array>
+#include <limits>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -58,6 +61,37 @@ namespace {
   nb::tuple triple (const std::array<unsigned int, 3>& values)
   {
     return nb::make_tuple(values[0], values[1], values[2]);
+  }
+
+  // Query points for the batched calls. A strict 1-D contiguous double array,
+  // so that an array argument matches this and a scalar cannot, which is what
+  // keeps the overload dispatch unambiguous.
+  using Coords = nb::ndarray<const double, nb::ndim<1>, nb::c_contig, nb::device::cpu>;
+
+  using IndexArray2D = nb::ndarray<nb::numpy, unsigned int, nb::ndim<2>>;
+
+  IndexArray2D indexArray2D (std::vector<unsigned int>&& values,
+                             const size_t rows, const size_t cols)
+  {
+    auto* held = new std::vector<unsigned int>(std::move(values));
+    nb::capsule owner(held, [](void* p) noexcept {
+      delete static_cast<std::vector<unsigned int>*>(p);
+    });
+    return IndexArray2D(held->data(), {rows, cols}, owner);
+  }
+
+  size_t batchSize (const Coords& x, const Coords& y, const Coords& z)
+  {
+    if (x.shape(0) != y.shape(0) || x.shape(0) != z.shape(0))
+      throw meshsearch::Error("the query coordinate arrays differ in length");
+    return x.shape(0);
+  }
+
+  // A batched call fails where the single-point call would, naming the query
+  // that did it, and returns nothing partial.
+  std::string queryPrefix (const size_t i)
+  {
+    return "query "+std::to_string(i)+": ";
   }
 
 }
@@ -132,6 +166,27 @@ NB_MODULE(meshsearch, m)
     .def_prop_ro("cellsize", &meshsearch::MeshGrid::get_cellsize, "Cell side.")
 
     .def("nearest_object",
+         [](const meshsearch::MeshGrid& self, const Coords& x, const Coords& y, const Coords& z) {
+           const size_t n = batchSize(x, y, z);
+           const double* px = x.data();
+           const double* py = y.data();
+           const double* pz = z.data();
+           std::vector<unsigned int> out(n);
+           {
+             nb::gil_scoped_release released;
+             for (size_t i=0; i<n; ++i) {
+               try { out[i] = self.nearestObject(px[i], py[i], pz[i]); }
+               catch (const meshsearch::IndexError& e) { throw meshsearch::IndexError(queryPrefix(i)+e.what()); }
+               catch (const meshsearch::Error& e) { throw meshsearch::Error(queryPrefix(i)+e.what()); }
+             }
+           }
+           return indexArray(std::move(out));
+         },
+         "x"_a, "y"_a, "z"_a,
+         "The object nearest to each of an array of points: one index per\n"
+         "query, in query order.")
+
+    .def("nearest_object",
          nb::overload_cast<double, double, double>(&meshsearch::MeshGrid::nearestObject, nb::const_),
          "x"_a, "y"_a, "z"_a,
          "Index of the object nearest to a point.")
@@ -140,6 +195,32 @@ NB_MODULE(meshsearch, m)
          nb::overload_cast<unsigned int>(&meshsearch::MeshGrid::nearestObject, nb::const_),
          "index"_a,
          "Index of the object nearest to an object, which is excluded.")
+
+    .def("nearest_objects",
+         [](const meshsearch::MeshGrid& self, const unsigned int n,
+            const Coords& x, const Coords& y, const Coords& z) {
+           const size_t queries = batchSize(x, y, z);
+           const double* px = x.data();
+           const double* py = y.data();
+           const double* pz = z.data();
+           std::vector<unsigned int> out(queries*size_t(n));
+           {
+             nb::gil_scoped_release released;
+             for (size_t i=0; i<queries; ++i) {
+               try {
+                 const auto found = self.nearestObjects(n, px[i], py[i], pz[i]);
+                 std::copy(found.begin(), found.end(), out.begin()+i*size_t(n));
+               }
+               catch (const meshsearch::IndexError& e) { throw meshsearch::IndexError(queryPrefix(i)+e.what()); }
+               catch (const meshsearch::Error& e) { throw meshsearch::Error(queryPrefix(i)+e.what()); }
+             }
+           }
+           return indexArray2D(std::move(out), queries, n);
+         },
+         "n"_a, "x"_a, "y"_a, "z"_a,
+         "The n objects nearest to each of an array of points, nearest first:\n"
+         "an (n_query, n) array, rectangular because every query returns\n"
+         "exactly n.")
 
     .def("nearest_objects",
          [](const meshsearch::MeshGrid& self, const unsigned int n,
@@ -155,6 +236,38 @@ NB_MODULE(meshsearch, m)
          },
          "n"_a, "index"_a,
          "The n objects nearest to an object, which is excluded, nearest first.")
+
+    .def("close_objects",
+         [](const meshsearch::MeshGrid& self, const Coords& x, const Coords& y, const Coords& z,
+            const double rmax, const double rmin) {
+           const size_t queries = batchSize(x, y, z);
+           const double* px = x.data();
+           const double* py = y.data();
+           const double* pz = z.data();
+           std::vector<unsigned int> indices;
+           std::vector<unsigned int> offsets(queries+1, 0);
+           {
+             nb::gil_scoped_release released;
+             for (size_t i=0; i<queries; ++i) {
+               try {
+                 const auto found = self.closeObjects(px[i], py[i], pz[i], rmax, rmin);
+                 indices.insert(indices.end(), found.begin(), found.end());
+               }
+               catch (const meshsearch::IndexError& e) { throw meshsearch::IndexError(queryPrefix(i)+e.what()); }
+               catch (const meshsearch::Error& e) { throw meshsearch::Error(queryPrefix(i)+e.what()); }
+               if (indices.size() > std::numeric_limits<unsigned int>::max())
+                 throw meshsearch::Error("the batch holds more results than a uint32 offset can address");
+               offsets[i+1] = static_cast<unsigned int>(indices.size());
+             }
+           }
+           return nb::make_tuple(indexArray(std::move(indices)), indexArray(std::move(offsets)));
+         },
+         "x"_a, "y"_a, "z"_a, "rmax"_a, "rmin"_a = 0.,
+         "Objects in a shell around each of an array of points, as (indices,\n"
+         "offsets) in compressed-row form: the results of query i are\n"
+         "indices[offsets[i]:offsets[i+1]]. offsets has n_query + 1 entries,\n"
+         "starts at 0 and ends at len(indices). A query with no results gives\n"
+         "an empty slice, never a missing entry.")
 
     .def("close_objects",
          [](const meshsearch::MeshGrid& self, const double x, const double y, const double z,

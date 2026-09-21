@@ -102,6 +102,74 @@ for or along with every other error the grid raises.
 Run the Python tests with `pytest tests/test_meshgrid.py` against an installed
 build.
 
+### Batched queries
+
+The three point-taking queries also accept arrays of query points, answering
+all of them in one call:
+
+```python
+nearest = grid.nearest_object(qx, qy, qz)              # (n_query,) uint32
+five    = grid.nearest_objects(5, qx, qy, qz)          # (n_query, 5) uint32
+idx, off = grid.close_objects(qx, qy, qz, 0.02)        # compressed-row form
+```
+
+The same names are overloaded: three scalars ask about one point, three arrays
+ask about many. Query points must be numpy arrays rather than lists, because an
+array argument is what selects the batched form. A one-element array takes the
+batched path and returns a one-element result.
+
+**This exists only in Python, and that is deliberate.** Crossing the Python
+boundary costs a few microseconds per call, which is more than some of these
+queries take to run: it is why calling scipy's `cKDTree` once per point is
+about five times slower than handing it the whole array, on identical work. A
+C++ caller has no such boundary and writes a loop, so the C++ library has no
+batched API and is not missing one. The **index-taking overloads have no
+batched form either**, in Python or C++: their input is a single index, so
+there is no per-call cost to amortise over anything.
+
+A batched call raises where the single-point call would, naming the query that
+failed — `query 17: X coordinate outside the box` — and returns nothing
+partial.
+
+### The compressed-row result
+
+`nearest_objects` is rectangular: every query returns exactly `n`, so the
+result is one `(n_query, n)` array. A shell is not — the count varies per query
+— so `close_objects` returns two arrays instead:
+
+- **`indices`** holds every result, concatenated in query order.
+- **`offsets`** has `n_query + 1` entries. The results of query `i` are
+  `indices[offsets[i]:offsets[i+1]]`. `offsets[0]` is `0` and the last entry is
+  `len(indices)`. A query with no results gives an empty slice, never a missing
+  entry. Both arrays are `uint32`, and `offsets` counts results, not queries, so
+  it is wide enough for the whole batch.
+
+```python
+idx, off = grid.close_objects(qx, qy, qz, 0.02)
+
+idx[off[i]:off[i+1]]          # the neighbours of query i, no copy
+counts = np.diff(off)         # how many each query found
+counts.sum() == len(idx)      # always
+```
+
+The idiom that makes this form worth learning is pairing each result with the
+query it came from:
+
+```python
+query_of = np.repeat(np.arange(len(qx)), np.diff(off))
+```
+
+`indices` and `query_of` are now two flat arrays of the same length, so any
+per-query quantity is one vectorised expression over every result at once —
+`np.bincount(query_of, weights=...)` to reduce per query, boolean masks to
+select across queries. `examples/example_batch.py` works through it.
+
+**Why not a list of arrays?** Because that would allocate one Python object per
+query, which is the cost the batched call exists to remove: a batch of 50,000
+queries would hand back 50,000 numpy arrays. There is deliberately no helper to
+convert the compressed form into such a list, it would be slow and would undo
+the point. Slice it, or use the flat form directly.
+
 ## Licence
 
 BSD 3-Clause; see `LICENSE`.
