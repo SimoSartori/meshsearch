@@ -106,9 +106,13 @@ NB_MODULE(meshsearch, m)
   // as well as from Python's IndexError. Either base catches it, exactly as
   // catch (const Error&) and catch (const IndexError&) both do in C++.
   nb::object error_type = nb::exception<meshsearch::Error>(m, "Error", PyExc_ValueError);
+  error_type.attr("__doc__") = "Thrown on invalid input or on a point outside the box.";
 
   nb::object bases = nb::make_tuple(error_type, nb::borrow(PyExc_IndexError));
-  PyObject* index_error = PyErr_NewException("meshsearch.IndexError", bases.ptr(), nullptr);
+  PyObject* index_error = PyErr_NewExceptionWithDoc(
+    "meshsearch.IndexError",
+    "Thrown on an index that is out of range or names a removed object.",
+    bases.ptr(), nullptr);
   if (index_error == nullptr) throw nb::python_error();
   m.attr("IndexError") = nb::steal(index_error);
 

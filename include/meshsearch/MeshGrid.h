@@ -12,6 +12,7 @@ namespace meshsearch {
   /// Thrown on invalid input or on a point outside the box.
   class Error : public std::runtime_error {
   public:
+    /// @param what the message, returned by what()
     explicit Error (const std::string& what);
   };
 
@@ -19,12 +20,17 @@ namespace meshsearch {
   /// Thrown on an index that is out of range or names a removed object.
   class IndexError : public Error {
   public:
+    /// @param what the message, returned by what()
     explicit IndexError (const std::string& what);
   };
 
 
   /// Cell offset relative to a target cell.
-  struct GridOffset { int i, j, k; };
+  struct GridOffset {
+    int i;  ///< offset along x, in cells
+    int j;  ///< offset along y, in cells
+    int k;  ///< offset along z, in cells
+  };
 
 
   /**
@@ -108,6 +114,7 @@ namespace meshsearch {
     /**
      *  @brief The @p N objects nearest to a point, nearest first.
      *  @param N at most get_nObjects(); 0 returns an empty vector
+     *  @param X,Y,Z the point, which must lie inside the box
      *  @throw Error if the point is outside the box, or if N is too large
      *
      *  Nothing is excluded: an object lying on the point is at distance 0 and
@@ -119,6 +126,7 @@ namespace meshsearch {
     /**
      *  @brief The @p N objects nearest to object @p index, which is excluded.
      *  @param N at most get_nObjects()-1; 0 returns an empty vector
+     *  @param index the object to measure from, itself excluded
      *  @throw IndexError if @p index is out of range or removed
      *  @throw Error if N is too large
      *
@@ -130,6 +138,9 @@ namespace meshsearch {
 
     /**
      *  @brief Objects at distance d from a point, with Rmin <= d <= Rmax.
+     *  @param X,Y,Z the point, which must lie inside the box
+     *  @param Rmax outer radius, inclusive; +inf is accepted
+     *  @param Rmin inner radius, inclusive; 0 by default, giving a ball
      *  @return the indices, in unspecified order
      *  @throw Error if the point is outside the box, if a radius is negative
      *    or NaN, or if Rmin exceeds Rmax
@@ -150,6 +161,9 @@ namespace meshsearch {
     /**
      *  @brief Objects at distance d from object @p index, with
      *  Rmin <= d <= Rmax. The object itself is excluded.
+     *  @param index the object to measure from, itself excluded
+     *  @param Rmax outer radius, inclusive; +inf is accepted
+     *  @param Rmin inner radius, inclusive; 0 by default, giving a ball
      *  @return the indices, in unspecified order
      *  @throw IndexError if @p index is out of range or removed
      *  @throw Error if a radius is negative or NaN, or if Rmin exceeds Rmax

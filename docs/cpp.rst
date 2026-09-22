@@ -17,9 +17,11 @@ Errors
 
 .. doxygenclass:: meshsearch::Error
    :project: meshsearch
+   :members:
 
 .. doxygenclass:: meshsearch::IndexError
    :project: meshsearch
+   :members:
 
 Supporting types
 ----------------
