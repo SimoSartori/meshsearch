@@ -17,6 +17,11 @@ option(MESHSEARCH_BUILD_PYTHON "Build the Python bindings" OFF)
 
 add_library(meshsearch STATIC src/MeshGrid.cpp)
 
+# The archive gets linked into the Python module, which is a shared object.
+# Without this, GCC emits absolute relocations that a shared object cannot use
+# and the link fails on Linux; Clang on macOS is position-independent anyway.
+set_target_properties(meshsearch PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 target_include_directories(meshsearch PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)

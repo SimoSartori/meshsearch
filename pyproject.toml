@@ -26,8 +26,9 @@ MESHSEARCH_BUILD_TESTS = "OFF"
 MESHSEARCH_BUILD_EXAMPLES = "OFF"
 
 [tool.cibuildwheel]
-# CPython only: the bindings are nanobind, which does not support PyPy.
-skip = ["pp*", "*_i686", "*-musllinux_*"]
+# PyPy is not in the default build set, so it needs no skip; the bindings are
+# nanobind, which does not support it in any case.
+skip = ["*_i686", "*-musllinux_*"]
 # every wheel is tested against the Python suite before it is uploaded
 test-requires = "pytest"
 test-command = "pytest {project}/tests/test_meshgrid.py"
