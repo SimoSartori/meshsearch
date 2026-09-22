@@ -24,3 +24,15 @@ build-dir = "build/{wheel_tag}"
 MESHSEARCH_BUILD_PYTHON = "ON"
 MESHSEARCH_BUILD_TESTS = "OFF"
 MESHSEARCH_BUILD_EXAMPLES = "OFF"
+
+[tool.cibuildwheel]
+# CPython only: the bindings are nanobind, which does not support PyPy.
+skip = ["pp*", "*_i686", "*-musllinux_*"]
+# every wheel is tested against the Python suite before it is uploaded
+test-requires = "pytest"
+test-command = "pytest {project}/tests/test_meshgrid.py"
+
+[tool.cibuildwheel.macos]
+# one arm64 runner builds both; the cross-built x86_64 wheels cannot be tested there
+archs = ["arm64", "x86_64"]
+environment = { MACOSX_DEPLOYMENT_TARGET = "10.13" }
