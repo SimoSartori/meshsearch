@@ -53,7 +53,8 @@ namespace meshsearch {
     /**
      *  @brief Build the grid.
      *  @param X,Y,Z coordinates, all of the same length, copied into the grid
-     *  @param cellsize cell side
+     *  @param cellsize cell side; one to four mean separations of the data is
+     *    the usual range, and docs/benchmark.md measures what it costs
      *  @param limits box as {{xlo,xhi},{ylo,yhi},{zlo,zhi}}; if empty, the data
      *    range padded by a margin proportional to it
      *  @throw Error if the vectors differ in length, if cellsize is not

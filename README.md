@@ -79,6 +79,26 @@ radius and is returned.
 Const members may be called concurrently on one grid; non-const members may
 not.
 
+## Performance
+
+`docs/benchmark.md` measures meshsearch against scipy's `cKDTree` and sklearn's
+`BallTree`, and measures what the cell side costs. At 1e7 uniform points:
+
+- construction is 2x to 3.7x faster than cKDTree;
+- nearest neighbour is 5x to 8x faster per call and 2.4x to 3.1x faster
+  batched, at a cell side of one mean separation;
+- a radius query on a coarse grid is the fastest thing measured, 8.76
+  microseconds batched against cKDTree's 9.22;
+- `k = 10` is 2x to 7x slower than batched cKDTree — take that query elsewhere
+  if it dominates;
+- memory is the price: 1.5 GiB at one mean separation against cKDTree's
+  400 MiB, falling to 672 MiB at four.
+
+The cell side is the one tuning parameter. Two to three mean separations is a
+reasonable default, one mean separation favours nearest-neighbour queries, and
+three to four favours shells; `python docs/benchmark_cellsize.py --sweep`
+repeats the sweep on your own data.
+
 ## Python
 
 The same grid is available from Python, with snake_case names and numpy
