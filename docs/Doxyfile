@@ -1,0 +1,34 @@
+# Doxygen is run for its XML only, which Breathe turns into the C++ reference.
+# Sphinx runs it: see conf.py.
+
+PROJECT_NAME           = meshsearch
+INPUT                  = ../include/meshsearch
+FILE_PATTERNS          = *.h
+RECURSIVE              = YES
+OUTPUT_DIRECTORY       = doxygen
+
+# Only what carries a comment is documented, so an undocumented member is a
+# gap in the header rather than something the site quietly fills in.
+EXTRACT_ALL            = NO
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = NO
+EXTRACT_LOCAL_CLASSES  = NO
+HIDE_UNDOC_MEMBERS     = YES
+HIDE_UNDOC_CLASSES     = YES
+INTERNAL_DOCS          = NO
+
+# Undocumented public members are worth hearing about; missing @param blocks on
+# a header that documents by prose are not.
+WARN_IF_UNDOCUMENTED   = YES
+WARN_NO_PARAMDOC       = NO
+WARN_AS_ERROR          = NO
+
+GENERATE_HTML          = NO
+GENERATE_LATEX         = NO
+GENERATE_XML           = YES
+XML_OUTPUT             = xml
+XML_PROGRAMLISTING     = NO
+
+QUIET                  = YES
+MARKDOWN_SUPPORT       = YES
+AUTOLINK_SUPPORT       = YES

@@ -1,0 +1,6 @@
+# The documentation build. The package itself is installed separately, because
+# the Python reference is read from the installed module.
+sphinx >= 8
+furo
+breathe
+myst-parser

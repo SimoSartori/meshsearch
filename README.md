@@ -12,6 +12,9 @@ CosmoBolognaLib, but it depends on nothing from it.
 `include/meshsearch/MeshGrid.h` is the specification: it declares the
 interface and states the guarantees it makes.
 
+Documentation, covering both APIs in one place:
+**<https://simosartori.github.io/meshsearch/>**
+
 ## Build
 
 Needs CMake 3.16 or later and a C++17 compiler.
@@ -60,6 +63,7 @@ std::vector<unsigned int> shell = grid.closeObjects(0.5, 0.5, 0.5, 0.15, 0.10);
 std::vector<unsigned int> around = grid.nearestObjects(5, nearest);
 ```
 
+<!-- docs:concepts-start -->
 Three things to know before using it. A shell is `Rmin <= d <= Rmax`, closed at
 both ends, so a ball holds every object within `Rmax` and an object sitting
 exactly on either radius is returned. Indices are stable:
@@ -78,6 +82,7 @@ radius and is returned.
 
 Const members may be called concurrently on one grid; non-const members may
 not.
+<!-- docs:concepts-end -->
 
 ## Performance
 
@@ -133,6 +138,7 @@ build.
 
 ### Batched queries
 
+<!-- docs:batched-start -->
 The three point-taking queries also accept arrays of query points, answering
 all of them in one call:
 
@@ -198,6 +204,7 @@ query, which is the cost the batched call exists to remove: a batch of 50,000
 queries would hand back 50,000 numpy arrays. There is deliberately no helper to
 convert the compressed form into such a list, it would be slow and would undo
 the point. Slice it, or use the flat form directly.
+<!-- docs:batched-end -->
 
 ## Licence
 
