@@ -16,9 +16,9 @@ jobs:
     name: sdist
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -38,7 +38,7 @@ jobs:
       - name: Check the metadata PyPI will render
         run: pipx run twine check dist/*
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-sdist
           path: dist/*.tar.gz
@@ -52,13 +52,13 @@ jobs:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: pypa/cibuildwheel@v4.2.1
         with:
           output-dir: wheelhouse
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.os }}
           path: wheelhouse/*.whl
@@ -79,7 +79,7 @@ jobs:
       id-token: write          # mints the OIDC token PyPI checks; no API token
 
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: dist-*
           merge-multiple: true
