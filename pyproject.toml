@@ -29,13 +29,15 @@ MESHSEARCH_BUILD_EXAMPLES = "OFF"
 # PyPy is not in the default build set, so it needs no skip; the bindings are
 # nanobind, which does not support it in any case. CPython 3.15 is skipped
 # until the project is built and tested against one: a wheel tagged cp315 is a
-# claim of support, and nothing here has checked it yet.
-skip = ["*_i686", "*-musllinux_*", "cp315-*"]
+# claim of support, and nothing here has checked it yet. The free-threaded
+# build has its own identifier, cp315t, and needs its own selector.
+skip = ["*_i686", "*-musllinux_*", "cp315-*", "cp315t-*"]
 # every wheel is tested against the Python suite before it is uploaded
 test-requires = "pytest"
 test-command = "pytest {project}/tests/test_meshgrid.py"
 
 [tool.cibuildwheel.macos]
-# one arm64 runner builds both; the cross-built x86_64 wheels cannot be tested there
+# one arm64 runner builds both, and tests both: the x86_64 wheels are
+# cross-built and then run under Rosetta
 archs = ["arm64", "x86_64"]
 environment = { MACOSX_DEPLOYMENT_TARGET = "10.13" }
