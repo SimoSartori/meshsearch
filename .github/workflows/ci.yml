@@ -12,7 +12,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Configure
         run: cmake -S . -B build
@@ -22,3 +22,24 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  python:
+    name: python module on ubuntu-latest
+    runs-on: ubuntu-latest
+
+    # The job above builds the static library and links it into executables.
+    # This one links it into a shared object, which is a different link and the
+    # one that release wheels and every Linux source install perform.
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Build and install the module
+        # pyproject.toml sets MESHSEARCH_BUILD_PYTHON=ON for this build
+        run: pip install ".[test]"
+
+      - name: Test
+        run: pytest tests/test_meshgrid.py
