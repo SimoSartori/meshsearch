@@ -189,12 +189,15 @@ NB_MODULE(meshsearch, m)
     .def("nearest_object",
          nb::overload_cast<double, double, double>(&meshsearch::MeshGrid::nearestObject, nb::const_),
          "x"_a, "y"_a, "z"_a,
-         "Index of the object nearest to a point.")
+         "Index of the object nearest to a point. An object lying on the\n"
+         "point is at distance 0 and is the answer.")
 
     .def("nearest_object",
          nb::overload_cast<unsigned int>(&meshsearch::MeshGrid::nearestObject, nb::const_),
          "index"_a,
-         "Index of the object nearest to an object, which is excluded.")
+         "Index of the object nearest to an object. The query object is\n"
+         "excluded by identity, not by distance: another object coincident\n"
+         "with it is at distance 0 and may be the answer.")
 
     .def("nearest_objects",
          [](const meshsearch::MeshGrid& self, const unsigned int n,
@@ -235,7 +238,9 @@ NB_MODULE(meshsearch, m)
            return indexArray(self.nearestObjects(n, index));
          },
          "n"_a, "index"_a,
-         "The n objects nearest to an object, which is excluded, nearest first.")
+         "The n objects nearest to an object, nearest first. The query object\n"
+         "is excluded by identity, not by distance: another object coincident\n"
+         "with it is at distance 0 and is among them.")
 
     .def("close_objects",
          [](const meshsearch::MeshGrid& self, const Coords& x, const Coords& y, const Coords& z,
@@ -263,11 +268,12 @@ NB_MODULE(meshsearch, m)
            return nb::make_tuple(indexArray(std::move(indices)), indexArray(std::move(offsets)));
          },
          "x"_a, "y"_a, "z"_a, "rmax"_a, "rmin"_a = 0.,
-         "Objects in a shell around each of an array of points, as (indices,\n"
-         "offsets) in compressed-row form: the results of query i are\n"
-         "indices[offsets[i]:offsets[i+1]]. offsets has n_query + 1 entries,\n"
-         "starts at 0 and ends at len(indices). A query with no results gives\n"
-         "an empty slice, never a missing entry.")
+         "Objects at distance d from each of an array of points, with\n"
+         "rmin <= d <= rmax, as (indices, offsets) in compressed-row form:\n"
+         "the results of query i are indices[offsets[i]:offsets[i+1]].\n"
+         "offsets has n_query + 1 entries, starts at 0 and ends at\n"
+         "len(indices). A query with no results gives an empty slice, never a\n"
+         "missing entry.")
 
     .def("close_objects",
          [](const meshsearch::MeshGrid& self, const double x, const double y, const double z,
@@ -276,7 +282,9 @@ NB_MODULE(meshsearch, m)
          },
          "x"_a, "y"_a, "z"_a, "rmax"_a, "rmin"_a = 0.,
          "Objects at distance d from a point, with rmin <= d <= rmax, in\n"
-         "unspecified order.")
+         "unspecified order. The interval is closed at both ends, so an object\n"
+         "at exactly either radius is returned. An object lying on the point\n"
+         "is at d = 0 and is returned.")
 
     .def("close_objects",
          [](const meshsearch::MeshGrid& self, const unsigned int index,
@@ -285,7 +293,9 @@ NB_MODULE(meshsearch, m)
          },
          "index"_a, "rmax"_a, "rmin"_a = 0.,
          "Objects at distance d from an object, with rmin <= d <= rmax, in\n"
-         "unspecified order. The object itself is excluded.")
+         "unspecified order. The query object is excluded by identity, not by\n"
+         "distance: another object coincident with it is at d = 0 and is\n"
+         "returned.")
 
     .def("get_cell", &meshsearch::MeshGrid::get_Cell, "x"_a, "y"_a, "z"_a,
          "Linear index of the cell containing a point.")

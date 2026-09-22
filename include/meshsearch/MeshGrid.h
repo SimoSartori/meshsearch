@@ -88,6 +88,9 @@ namespace meshsearch {
      *  @brief Index of the object nearest to a point.
      *  @throw Error if the point is outside the box, or if the grid holds no
      *    objects
+     *
+     *  Nothing is excluded: an object lying on the point is at distance 0 and
+     *  is the answer.
      */
     unsigned int nearestObject (double X, double Y, double Z) const;
 
@@ -95,6 +98,9 @@ namespace meshsearch {
      *  @brief Index of the object nearest to object @p index, which is excluded.
      *  @throw IndexError if @p index is out of range or removed
      *  @throw Error if no other object remains
+     *
+     *  @p index is excluded by identity, not by distance: another object
+     *  coincident with it is at distance 0 and may be the answer.
      */
     unsigned int nearestObject (unsigned int index) const;
 
@@ -102,6 +108,9 @@ namespace meshsearch {
      *  @brief The @p N objects nearest to a point, nearest first.
      *  @param N at most get_nObjects(); 0 returns an empty vector
      *  @throw Error if the point is outside the box, or if N is too large
+     *
+     *  Nothing is excluded: an object lying on the point is at distance 0 and
+     *  is among them.
      */
     std::vector<unsigned int> nearestObjects (unsigned int N,
                                               double X, double Y, double Z) const;
@@ -111,6 +120,9 @@ namespace meshsearch {
      *  @param N at most get_nObjects()-1; 0 returns an empty vector
      *  @throw IndexError if @p index is out of range or removed
      *  @throw Error if N is too large
+     *
+     *  @p index is excluded by identity, not by distance: another object
+     *  coincident with it is at distance 0 and is among them.
      */
     std::vector<unsigned int> nearestObjects (unsigned int N,
                                               unsigned int index) const;
@@ -120,6 +132,13 @@ namespace meshsearch {
      *  @return the indices, in unspecified order
      *  @throw Error if the point is outside the box, if a radius is negative
      *    or NaN, or if Rmin exceeds Rmax
+     *
+     *  The interval is closed at both ends, so a ball holds every object
+     *  within Rmax of the point and an object at exactly either end is
+     *  returned. Rmin == Rmax selects the objects at exactly that distance.
+     *
+     *  Nothing is excluded by identity: an object lying on the point is at
+     *  d = 0 and is returned.
      *
      *  A shell reaching past the box is truncated, not an error. An infinite
      *  Rmax is accepted and selects every object from Rmin outwards.
@@ -133,6 +152,10 @@ namespace meshsearch {
      *  @return the indices, in unspecified order
      *  @throw IndexError if @p index is out of range or removed
      *  @throw Error if a radius is negative or NaN, or if Rmin exceeds Rmax
+     *
+     *  The interval is the point overload's, closed at both ends. @p index is
+     *  excluded by identity, not by distance, so another object coincident
+     *  with it is at d = 0 and is returned.
      *
      *  An infinite Rmax is accepted and selects every object from Rmin
      *  outwards.

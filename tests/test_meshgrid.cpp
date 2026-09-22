@@ -594,9 +594,6 @@ namespace {
     printf("  degenerate and extreme extents: ok\n");
   }
 
-  // The load-bearing group: every query kind against brute force over several
-  // thousand random points, at three cell sizes relative to the mean
-  // separation. This is what establishes that the geometry is right, rather
   // The Rmax layer bound, swept across the ratio that drives it. A layer L
   // guarantees a minimum distance of L cell sides, so the bound scans layers 0
   // to floor(Rmax/cellsize) and no further. The ratio is what decides how many
@@ -695,6 +692,9 @@ namespace {
   }
 
 
+  // The load-bearing group: every query kind against brute force over several
+  // thousand random points, at three cell sizes relative to the mean
+  // separation. This is what establishes that the geometry is right, rather
   // than merely self-consistent.
   void testBruteForce ()
   {
@@ -831,9 +831,14 @@ namespace {
 
 
   // closeObjects' bounds are inclusive at both ends, Rmin <= d <= Rmax, on
-  // hand-placed points whose distances are exact in binary so the boundary is
-  // unambiguous; and the index overload excludes the query object itself but
-  // not other objects coincident with it.
+  // hand-placed points whose distances are exact in binary so neither boundary
+  // comparison is decided by rounding: an object at exactly Rmin is returned,
+  // and so is one at exactly Rmax.
+  //
+  // The interval is not where self-exclusion lives. The index overload drops
+  // the query object by identity and nothing else, so a coincident duplicate
+  // at d = 0 is a different object and is returned; the point overload has no
+  // identity to drop, so it returns everything at d = 0.
   void testRminBoundary ()
   {
     const std::vector<double> X = {5., 6., 7., 8., 5., 5.};
@@ -853,9 +858,17 @@ namespace {
     assert(sorted(grid.closeObjects(0u, 3., 2.)) == std::vector<unsigned int>({2, 3, 4, 5}));
     assert(sorted(grid.closeObjects(0u, 3., 3.)) == std::vector<unsigned int>({3, 5}));
 
+    // a ball takes in everything out to Rmax, the objects at exactly Rmax
+    // among them, and from a point it takes in the object at d = 0 too
+    assert(sorted(grid.closeObjects(0u, 2.)) == std::vector<unsigned int>({1, 2, 4}));
+    assert(sorted(grid.closeObjects(5., 5., 5., 2.)) == std::vector<unsigned int>({0, 1, 2, 4}));
+    assert(sorted(grid.closeObjects(5., 5., 5., 3., 3.)) == std::vector<unsigned int>({3, 5}));
+
     assert(sorted(grid.closeObjects(0u, 0., 0.)).empty());
     assert(sorted(grid.closeObjects(5., 5., 5., 0., 0.)) == std::vector<unsigned int>({0}));
 
+    // three objects share a position: the query object is excluded by
+    // identity, the two duplicates at d = 0 are not
     const std::vector<double> dX = {2., 2., 2., 4.};
     const std::vector<double> dY = {2., 2., 2., 2.};
     const std::vector<double> dZ = {2., 2., 2., 2.};

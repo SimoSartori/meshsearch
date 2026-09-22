@@ -60,12 +60,21 @@ std::vector<unsigned int> shell = grid.closeObjects(0.5, 0.5, 0.5, 0.15, 0.10);
 std::vector<unsigned int> around = grid.nearestObjects(5, nearest);
 ```
 
-Two things to know before using it. Indices are stable: `removeObject` leaves
-an index permanently invalid, `addObject` issues a new one, and indices are
-never reused or renumbered, so a stored index never comes to mean a different
-object. And errors are exceptions — `meshsearch::Error`, or
+Three things to know before using it. A shell is `Rmin <= d <= Rmax`, closed at
+both ends, so a ball holds every object within `Rmax` and an object sitting
+exactly on either radius is returned. Indices are stable:
+`removeObject` leaves an index permanently invalid, `addObject` issues a new
+one, and indices are never reused or renumbered, so a stored index never comes
+to mean a different object. And errors are exceptions — `meshsearch::Error`, or
 `meshsearch::IndexError` for an index that is out of range or removed — never
 return codes.
+
+The overloads taking an object exclude it **by identity, not by distance**:
+`closeObjects(i, Rmax)` omits object `i` itself, but another object at the same
+position is a different object, is at `d = 0`, and is returned. The same holds
+for `nearestObject` and `nearestObjects`. The point-taking overloads have no
+identity to exclude, so an object lying on the query point is simply within the
+radius and is returned.
 
 Const members may be called concurrently on one grid; non-const members may
 not.

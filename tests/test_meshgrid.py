@@ -476,7 +476,7 @@ def test_a_point_on_the_upper_face_lands_in_the_last_cell():
 
 def test_rmin_and_rmax_are_both_inclusive():
     # distances 1, 2 and 3 along x and 2, 3 along y from the first object, all
-    # exact in binary so the shell boundary is unambiguous
+    # exact in binary so neither shell boundary is decided by rounding
     X = [5.0, 6.0, 7.0, 8.0, 5.0, 5.0]
     Y = [5.0, 5.0, 5.0, 5.0, 7.0, 8.0]
     Z = [5.0] * 6
@@ -487,13 +487,19 @@ def test_rmin_and_rmax_are_both_inclusive():
     assert set(grid.close_objects(0, 3.0, 2.0).tolist()) == {2, 3, 4, 5}
     assert set(grid.close_objects(0, 3.0, 3.0).tolist()) == {3, 5}
 
+    # a ball takes in everything out to rmax, the objects at exactly rmax among
+    # them, and from a point it takes in the object at d = 0 too
+    assert set(grid.close_objects(0, 2.0).tolist()) == {1, 2, 4}
+    assert set(grid.close_objects(5.0, 5.0, 5.0, 2.0).tolist()) == {0, 1, 2, 4}
+
 
 def test_coincident_points():
     X = [2.0, 2.0, 2.0, 4.0]
     grid = meshsearch.MeshGrid(X, [2.0] * 3 + [2.0], [2.0] * 4, 1.0,
                                [[0.0, 16.0]] * 3)
 
-    # a point coincident with the query object is a neighbour at distance 0,
+    # self-exclusion is by identity, not by distance: a point coincident with
+    # the query object is a different object, at distance 0, and is returned;
     # the query object itself is not
     assert set(grid.close_objects(2.0, 2.0, 2.0, 0.0).tolist()) == {0, 1, 2}
     assert set(grid.close_objects(0, 0.0).tolist()) == {1, 2}
