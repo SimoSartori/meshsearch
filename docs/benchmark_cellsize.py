@@ -1,18 +1,16 @@
-"""Two follow-up measurements on meshsearch, both described in benchmark.md.
+"""What the cell side costs: build time, memory and the three query kinds,
+swept over cell sides of one to four mean separations at two data sizes.
 
-1. The cell side sweep. The first benchmark used one mean separation, which
-   gives about one object per cell. Grids in use are built coarser -- OT builds
-   at four mean separations, about 64 objects per cell -- and the mask holds
-   8 entries per cell, so the cell count and the memory with it fall as the
-   cube of the factor.
+The cell side is meshsearch's one tuning parameter. A fine grid holds few
+objects per cell and many cells; a coarse one the reverse, and the offset mask
+holds 8 entries per cell, so the cell count and the memory with it fall as the
+cube of the factor. The radius is held at twice the mean separation so that the
+answer stays the same size, about 33 neighbours, at every cell side.
 
-2. The locality test. Build the same points twice at the same cell side, once
-   in input order and once sorted by the cell each point falls into. Same n,
-   same cell count, same number of distance tests; only the order of the
-   per-cell allocations and of the coordinate accesses differs.
+The tables this produces are in benchmark.md, which reads them.
 
-    python docs/benchmark_cellsize.py --sweep
-    python docs/benchmark_cellsize.py --locality
+    python docs/benchmark_cellsize.py --sweep          # every size and cell side
+    python docs/benchmark_cellsize.py --one-sweep 1000000 3   # one, as JSON
 """
 
 import argparse
@@ -56,20 +54,6 @@ def _once(fn):
     return time.perf_counter() - t
 
 
-def cell_of(grid, x, y, z):
-    """The linear cell index of every point, in numpy.
-
-    Replicates what get_cell does, so that a whole array can be binned at once;
-    checked against get_cell on a sample before use.
-    """
-    lims, n_cells = grid.lims, grid.n_cells
-    idx = []
-    for coord, (lo, _), n in zip((x, y, z), lims, n_cells):
-        i = np.floor((coord - lo) / grid.cellsize).astype(np.int64)
-        idx.append(np.clip(i, 0, n - 1))
-    return (idx[0] * n_cells[1] * n_cells[2] + idx[1] * n_cells[2] + idx[2])
-
-
 def measure(grid, queries, radius):
     return {
         "nn_us": timed(lambda: [grid.nearest_object(*p) for p in queries]) * 1e3,
@@ -102,50 +86,6 @@ def run_sweep(n, factor):
     return result
 
 
-def run_locality(n, factor):
-    import meshsearch
-    x, y, z = points(n)
-    queries = query_points()
-    mps = n ** (-1 / 3)
-    cellsize = factor * mps
-    radius = 2 * mps
-
-    # the permutation that puts the points in cell order
-    probe = meshsearch.MeshGrid(x, y, z, cellsize)
-    cells = cell_of(probe, x, y, z)
-    sample = np.random.default_rng(7).integers(0, n, 200)
-    agree = all(int(cells[i]) == probe.get_cell(x[i], y[i], z[i]) for i in sample)
-    order = np.argsort(cells, kind="stable")
-    del probe
-    gc.collect()
-
-    out = {"n": n, "factor": factor, "cellsize": cellsize,
-           "binning_matches_get_cell": bool(agree)}
-
-    for label, (px, py, pz) in (("input_order", (x, y, z)),
-                                ("cell_order", (x[order], y[order], z[order]))):
-        px, py, pz = (np.ascontiguousarray(a) for a in (px, py, pz))
-        gc.collect()
-        before = rss_mib()
-        t = time.perf_counter()
-        grid = meshsearch.MeshGrid(px, py, pz, cellsize)
-        build = time.perf_counter() - t
-        row = {"build_s": build, "memory_mib": rss_mib() - before}
-        row.update(measure(grid, queries, radius))
-
-        # the two grids must agree geometrically, indices aside
-        d = []
-        for p in queries[:100]:
-            i = grid.nearest_object(*p)
-            d.append((px[i] - p[0]) ** 2 + (py[i] - p[1]) ** 2 + (pz[i] - p[2]) ** 2)
-        row["nearest_dist_checksum"] = float(np.sum(np.sqrt(d)))
-        out[label] = row
-        del grid
-        gc.collect()
-
-    return out
-
-
 def spawn(args_list):
     proc = subprocess.run([sys.executable, __file__] + args_list,
                           capture_output=True, text=True)
@@ -158,16 +98,11 @@ def spawn(args_list):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--sweep", action="store_true")
-    parser.add_argument("--locality", action="store_true")
-    parser.add_argument("--one-sweep", nargs=2, type=int)
-    parser.add_argument("--one-locality", nargs=2, type=int)
-    parser.add_argument("--factor", type=int, default=4)
+    parser.add_argument("--one-sweep", nargs=2, type=int, metavar=("N", "FACTOR"))
     args = parser.parse_args()
 
     if args.one_sweep:
         print(json.dumps(run_sweep(*args.one_sweep)))
-    elif args.one_locality:
-        print(json.dumps(run_locality(*args.one_locality)))
     elif args.sweep:
         rows = []
         for n in SIZES:
@@ -178,14 +113,8 @@ def main():
                 sys.stderr.write(f"{row['memory_mib']:,.0f} MiB\n")
                 rows.append(row)
         print(json.dumps(rows, indent=2))
-    elif args.locality:
-        rows = []
-        for n in SIZES:
-            sys.stderr.write(f"  locality n={n:,} cellsize={args.factor} mps\n")
-            rows.append(spawn(["--one-locality", str(n), str(args.factor)]))
-        print(json.dumps(rows, indent=2))
     else:
-        parser.error("choose --sweep or --locality")
+        parser.error("choose --sweep or --one-sweep N FACTOR")
 
 
 if __name__ == "__main__":
