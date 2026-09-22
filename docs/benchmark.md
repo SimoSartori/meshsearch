@@ -1,28 +1,35 @@
 # Performance
 
 Three questions: how meshsearch compares to the alternatives, how to choose the
-cell side, and what none of this measures.
+cell side, and what to expect on data unlike the data measured here.
 
-Every number here was produced by `docs/benchmark.py` and
-`docs/benchmark_cellsize.py --sweep` on an Apple M1 Pro (10 cores, 16 GiB,
-macOS 14.5), with Python 3.14.7, numpy 2.5.3, scipy 1.18.1, scikit-learn 1.9.1,
-and meshsearch built with AppleClang at `-O3`. Nothing is tuned to favour any
-library: the trees are built with default parameters and everything is queried
-single-threaded.
+The numbers are from an Apple M1 Pro (10 cores, 16 GiB, macOS 14.5) with
+Python 3.14.7, numpy 2.5.3, scipy 1.18.1, scikit-learn 1.9.1, and meshsearch
+built with AppleClang at `-O3`. Absolute times are machine-specific; the ratios
+between libraries travel better than the microseconds do. Treat a difference
+under about 10 per cent as a tie.
 
 ## Against cKDTree and BallTree
 
-Points are uniform in the unit cube from a seeded generator, with 1000 uniform
-query points, `k = 10`, and a radius of twice the mean separation — which holds
-the answer at about 33 neighbours at every size, so one query does a constant
-amount of work as the data grows. All three libraries return the same neighbour
-counts, 32.1, 32.9 and 33.2 at 1e5, 1e6 and 1e7, which is what makes the
-comparison mean anything.
+Three queries are measured, named here as the Python bindings spell them and
+identical to their C++ counterparts:
 
-Query times are microseconds for one query point, the median of three repeats.
-The per-call rows call the library once per point; the batched rows hand all
-1000 points over in a single call. Memory is resident-set growth from holding
-one structure, each library and size measured in its own process.
+| in the tables | the call | what it asks |
+|---|---|---|
+| **nearest** | `grid.nearest_object(x, y, z)` | the one nearest object |
+| **k = 10** | `grid.nearest_objects(10, x, y, z)` | the ten nearest, nearest first |
+| **radius** | `grid.close_objects(x, y, z, rmax)` | every object within `rmax` |
+
+`rmax` is twice the mean separation of the data, which holds the answer at
+about 33 neighbours at every size, so one query does the same amount of work as
+the data grows. cKDTree and BallTree answer the same three questions, through
+`query`, `query` with `k=10`, and `query_ball_point` / `query_radius`, and
+return the same neighbours.
+
+The points are uniform in the unit cube, and the queries are 1000 uniform query
+points. Query times are **microseconds for one query point**. The per-call rows
+call the library once per point; the batched rows hand all 1000 points over in
+a single call. Memory is the resident set the structure occupies.
 
 meshsearch is tabulated at two cell sides, because it has one and the trees do
 not. One mean separation gives about one object per cell; four gives about 64.
@@ -87,21 +94,19 @@ not. One mean separation gives about one object per cell; four gives about 64.
 
 ### What the numbers say
 
-**Construction: meshsearch is faster everywhere** — about 2x against cKDTree at
-one mean separation, 2.6x to 3.7x at four, where there are fewer cells to
-create.
+**Construction is faster everywhere** — about 2x against cKDTree at one mean
+separation, 2.6x to 3.7x at four.
 
-**Memory is its weakest column at a fine cell side and its strongest at a
-coarse one.** At one mean separation it holds 1.5 GiB at 1e7 against cKDTree's
-400 MiB, because the offset mask and the per-cell vectors both scale with the
-cell count. At four mean separations the cell count falls 64-fold, the figure
-drops to 672 MiB, and at 1e5 it is a third of cKDTree's.
+**Memory is the weakest column at a fine cell side and the strongest at a
+coarse one.** At one mean separation meshsearch holds 1.5 GiB at 1e7 against
+cKDTree's 400 MiB; at four mean separations, 672 MiB, and at 1e5 it is a third
+of cKDTree's.
 
 **Nearest neighbour, one mean separation: meshsearch wins in both calling
 styles.** Per call it is 5x to 8x faster than cKDTree; batched, 0.33, 0.42 and
 0.58 microseconds against 0.83, 1.31 and 1.42, so 2.4x to 3.1x faster. At four
-mean separations this reverses — 2.1x to 5.4x slower batched — because each
-cell holds 64 candidates to test.
+mean separations this reverses, 2.1x to 5.4x slower batched, because each cell
+holds 64 candidates to test.
 
 **Radius, four mean separations: batched meshsearch is the fastest thing
 measured.** 3.09, 4.48 and 8.76 microseconds against batched cKDTree's 4.56,
@@ -109,26 +114,21 @@ measured.** 3.09, 4.48 and 8.76 microseconds against batched cKDTree's 4.56,
 separation it is 1.0x to 1.6x slower than batched cKDTree.
 
 **k = 10 is the query to take elsewhere.** Against batched cKDTree, meshsearch
-is 2.0x to 4.2x slower at one mean separation and 4.9x to 7.1x at four, and no
-calling style closes it: the bounded heap pays for every candidate it rejects,
-while a tree rejects them in groups.
+is 2.0x to 4.2x slower at one mean separation and 4.9x to 7.1x at four. The gap
+is algorithmic, so no cell side and no calling style closes it: if this query
+dominates, use a tree.
 
-**BallTree loses every row.** Its per-call radius query is pathological — 9
-milliseconds at 1e7 against a batched 23 microseconds — which is sklearn's
-per-call overhead rather than its geometry.
+**BallTree loses every row.** Never call it once per point: its per-call radius
+query is 9 milliseconds at 1e7 against 23 microseconds batched.
 
 ### Per call or batched
 
-Subtracting the batched time from the per-call time gives what a library spends
-per call before doing any work. For cKDTree that is 7.2 to 8.1 microseconds
-across the three sizes; for meshsearch, **0.8 to 1.2**, because nanobind's
-dispatch is cheaper than scipy's Python-level wrapper.
-
-That sets how much batching can win. A query taking 1 microsecond gets most of
-its time back; one taking 15 gets under 10 per cent. In these tables batching
-gains 3.1x to 3.3x on nearest neighbour at one mean separation, and 1.1x to
-1.4x on everything else. If a query is already slow, batching is not what will
-fix it.
+A call from Python costs about 1 microsecond before any work happens, against
+7 to 8 for scipy. That is what decides how much batching can win: a query
+taking 1 microsecond gets most of its time back, one taking 15 gets under 10
+per cent. In these tables batching gains 3.1x to 3.3x on nearest neighbour at
+one mean separation and 1.1x to 1.4x on everything else. If a query is already
+slow, batching is not what will fix it.
 
 The batched forms exist in the Python bindings only. A C++ caller has no
 boundary to cross and writes a loop.
@@ -136,10 +136,8 @@ boundary to cross and writes a loop.
 ## Choosing the cell side
 
 The cell side is the one tuning parameter, and it is not a single trade-off:
-the best choice for one query kind is not the best for another. Measured with
-`docs/benchmark_cellsize.py --sweep`, radius held at twice the mean separation
-so the answer stays at 33 neighbours throughout. Query times in microseconds,
-the median of three repeats.
+the best choice for one query kind is not the best for another. Query times in
+microseconds, with `rmax` again at twice the mean separation.
 
 **1e6 points**
 
@@ -159,101 +157,76 @@ the median of three repeats.
 | 3 mps | 373,248 | 27 | 1.422 | 741 | 6.72 | 26.94 | 8.29 |
 | 4 mps | 157,464 | 64 | 1.459 | 701 | 9.88 | 33.20 | 9.74 |
 
-**Nearest neighbour is the one query that only gets worse.** From 1 to 4 mean
-separations it goes 1.21 to 4.38 microseconds at 1e6 and 1.80 to 9.88 at 1e7, a
-factor of 3.6 and 5.5. It scans a fixed neighbourhood of cells and tests
-everything in it, so its cost follows the objects per cell.
+**Nearest neighbour is the one query that only gets worse as the cell grows,**
+by a factor of 3.6 at 1e6 and 5.5 at 1e7 from one mean separation to four. Its
+cost follows the objects per cell.
 
-**k-nearest is flat in the middle and worse at the ends,** best at 2 mean
-separations at 1e6 (9.01 against 11.70 at 1 mps) and near-flat from 1 to 2 at
-1e7. Past that it follows the objects per cell like nearest neighbour, reaching
-a factor of 1.7 to 2.0 by 4 mps.
+**k-nearest is flat in the middle and worse at the ends,** best at two mean
+separations at 1e6 and near-flat from one to two at 1e7, then following the
+objects per cell like nearest neighbour.
 
-**A radius query is *fastest* on a coarse grid,** and its best value is in the
-middle: 4.41 microseconds at 3 mean separations against 10.88 at 1, and 8.29
-against 14.63 at 1e7. It sizes its scan to `Rmax` rather than scanning a fixed
-neighbourhood, so a coarser grid means fewer, larger cells covering the same
-sphere. The rise from 3 to 4 mps is the objects-per-cell term starting to win
-again.
+**A radius query is fastest on a coarse grid, with its best value in the
+middle:** 4.41 microseconds at three mean separations against 10.88 at one, and
+8.29 against 14.63 at 1e7. What decides its cost is `rmax / cellsize` rather
+than either alone — **keep that ratio at or below 1** and the scan stays within
+the nearest cells; above it the scan widens sharply.
 
-**Memory falls, but nothing like the cell count does.** At 1e7 it goes 1,622 to
-701 MiB, a factor of 2.3 for a 64-fold drop in cells. Two structures scale with
-the cell count and account for the saving: the offset mask, 8 entries of 12
-bytes per cell, is about 923 MiB at 1 mps against 14 at 4; and the per-cell
-vector headers, 24 bytes each, another 230 MiB against 4. Underneath them is a
-floor the cell side cannot touch — the grid's own copy of the coordinates
-(229 MiB at 1e7), the two index tables it keeps (76 MiB), and the bucket
-contents (38 MiB) — which is why 3 mps and 4 mps barely differ.
-
-**Cost grows with n at a coarse cell side, even though the work does not.** At
-a fixed cell side in mean separations, the objects per cell and the cells
-scanned are both constant, so a query performs the same number of distance
-tests at 1e7 as at 1e6. It nonetheless costs 2.26x on nearest neighbour from
-1e6 to 1e7 at 4 mps, against 1.49x at 1 mps. What grows is the cost of reaching
-memory, not the amount of geometry.
-
-### How far a shell query reaches
-
-A shell query scans whole layers of cells around the query point, where the
-layer index is a lower bound on distance: a layer-`L` cell is at least `L` cell
-sides away. The scan therefore covers layers 0 to `floor(Rmax / cellsize)`,
-which makes `Rmax / cellsize` — not `Rmax`, and not the cell side alone — the
-number that decides the work:
-
-| Rmax / cellsize | layers scanned | cells visited | of those, can hold a member |
-|---|---|---|---|
-| 0.25 | 0 | 27 | 3.0 |
-| 0.50 | 0 | 27 | 6.9 |
-| 1.00 | 0–1 | 125 | 20.7 |
-| 2.00 | 0–2 | 311 | 84.2 |
-| 4.00 | 0–4 | 1,015 | 443.9 |
-
-This is geometry, not a timing: the cell counts follow from the layer rule, and
-the last column is a 400-sample average over where the query point sits inside
-its own cell. Multiply cells visited by objects per cell for the number of
-distance tests a shell query performs.
-
-The cells that are scanned but cannot hold a member are inherent to grouping
-offsets by the floor of their minimum distance: a layer admitted because part
-of it is in range brings the rest of itself along.
+**Memory falls by about half, not by the drop in cell count.** From one mean
+separation to four at 1e7 it goes 1,622 to 701 MiB while the cells fall 64-fold,
+because what remains is a floor that does not depend on the cell side: the
+grid's copy of the coordinates and its index tables. Past about three mean
+separations there is no further saving to have.
 
 ### Starting point
 
-- **Mixed use:** two to three mean separations. Nothing is at its worst there,
-  and at 1e7 it costs 3.24 to 6.72 microseconds on nearest neighbour, 15.75 to
+- **Mixed use:** two to three mean separations. Nothing is at its worst there —
+  at 1e7 it costs 3.24 to 6.72 microseconds on nearest neighbour, 15.75 to
   26.94 on k = 10 and 8.29 to 14.21 on radius.
-- **Mostly nearest-neighbour work:** one mean separation, and pay for it in
-  memory — 1,622 MiB at 1e7 against 741 at three.
-- **Mostly shell or radius queries:** three to four, keeping `Rmax / cellsize`
-  at or below 1 so the scan stays within layers 0 and 1.
+- **Mostly nearest-neighbour work:** one mean separation, paid for in memory,
+  1,622 MiB at 1e7 against 741 at three.
+- **Mostly shell or radius queries:** three to four, keeping `rmax / cellsize`
+  at or below 1.
 - **Memory-bound:** go coarser, but expect little further gain past three mean
   separations.
 
-The sweep is cheap to repeat on real data, which is worth more than any of the
-above: `python docs/benchmark_cellsize.py --sweep`.
+Worth more than any of the above: run the sweep on your own data, which takes a
+few minutes.
 
-## What was not measured
+```
+python docs/benchmark_cellsize.py --sweep
+```
 
-**Clustered data.** Uniform random points in a cube are the case a uniform grid
-suits best. A clustered catalogue, a survey footprint with holes, or a strongly
-anisotropic box would change the picture, probably against meshsearch, because
-its cell side is global while a tree adapts to local density. Nothing here
-measures that, and the cell-side guidance above may not survive it.
+## What to expect on other data
 
-**Anything but one machine, one compiler and one Python.** Times are medians of
-three repeats, enough to rank effects of this size but not to separate
-differences under about 10 per cent. Treat a 1.05x as a tie.
+**Clustered or masked catalogues will behave differently, and the cell-side
+guidance may not survive.** Every number here is uniform random points in a
+cube, which is the case a uniform grid suits best. A clustered catalogue, or a
+survey footprint with holes, fills some cells heavily and leaves others empty:
+queries in the dense regions test far more candidates than the objects-per-cell
+average suggests, while the empty cells still cost memory and still get walked.
+A tree adapts its subdivision to local density and a uniform mesh does not, so
+expect the comparison to move against meshsearch, and expect the best cell side
+to differ from the one suggested above. Sweep it.
 
-**Threads.** Every measurement is single-threaded. Const members may be called
-concurrently on one grid, but no scaling across threads is measured here.
+**Read the fine-grid memory figures as an order of magnitude.** At one mean
+separation the grid holds millions of small per-cell vectors, and the resident
+set depends on how the allocator grows them; it varies by hundreds of MiB for
+the same data. Size a machine from the coarse-grid rows, which are stable, and
+treat one mean separation at 1e7 as "one to two gigabytes" rather than a number.
 
-**Memory precisely.** The figure is a resident-set high-water mark, and it is
-the noisiest number in this file: 1e7 at one mean separation reads 1,495 MiB in
-one table above and 1,622 in another, the same grid measured in two processes,
-because it depends on how the allocator grows ten million small vectors. The
-coarse-grid rows are stable to a few MiB. Read the fine-grid memory figures as
-an order of magnitude.
+**Nothing here measures threads.** Const members may be called concurrently on
+one grid, and non-const members may not, but no figure above says what that
+scales like.
 
-**Mixed workloads, removals and additions.** Each table measures one query kind
-on a static grid. `addObject` and `removeObject` are not timed, and neither is
-a grid that has been heavily modified after construction.
+**Nothing here measures a mixed or evolving workload.** Each table is one query
+kind on a grid built once and left alone. `addObject` and `removeObject` are not
+measured, nor is a grid queried after many of them. A grid that has churned
+heavily is not the grid measured here: the storage a removed object held is
+kept, and objects added later sit at the end of the coordinates rather than
+beside the others in their cell, which is where a freshly built grid gets some
+of its speed.
+
+**Nothing here measures anisotropic boxes or non-uniform units.** The cell is
+cubic and the same on all three axes. Data much longer in one dimension, or
+coordinates whose axes are not comparable, gets a cell side that is a compromise
+on every axis at once.
