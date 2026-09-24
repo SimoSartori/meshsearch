@@ -12,6 +12,9 @@ license = { file = "LICENSE" }
 authors = [{ name = "Simone Sartori" }]
 dependencies = ["numpy"]
 
+[project.urls]
+Documentation = "https://simosartori.github.io/meshsearch"
+
 [project.optional-dependencies]
 test = ["pytest"]
 benchmark = ["pytest", "scipy", "scikit-learn", "psutil"]
