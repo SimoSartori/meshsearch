@@ -17,11 +17,19 @@ them one to one.
 pip install meshsearch
 ```
 
-For the C++ library, build it with CMake and link the static library:
+For the C++ library, build and install it with CMake:
 
 ```
 cmake -S . -B build
 cmake --build build
+cmake --install build --prefix /path/to/prefix
+```
+
+and use it from your own CMake project:
+
+```cmake
+find_package(meshsearch 0.2 CONFIG REQUIRED)
+target_link_libraries(your_target PRIVATE meshsearch::meshsearch)
 ```
 
 ## In two lines

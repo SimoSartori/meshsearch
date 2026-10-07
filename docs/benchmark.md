@@ -193,7 +193,7 @@ Worth more than any of the above: run the sweep on your own data, which takes a
 few minutes.
 
 ```
-python docs/benchmark_cellsize.py --sweep
+python benchmarks/benchmark_cellsize.py --sweep
 ```
 
 ## What to expect on other data

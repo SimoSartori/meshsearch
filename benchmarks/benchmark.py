@@ -3,9 +3,9 @@
 Each library/size combination runs in its own process, so the memory figure is
 the resident-set growth caused by holding that one structure.
 
-    python docs/benchmark.py --factor 1   # cell side of one mean separation
-    python docs/benchmark.py --factor 4   # four, the regime the library is used in
-    python docs/benchmark.py --one meshsearch 100000 --factor 4   # one, as JSON
+    python benchmarks/benchmark.py --factor 1   # cell side of one mean separation
+    python benchmarks/benchmark.py --factor 4   # four, the regime the library is used in
+    python benchmarks/benchmark.py --one meshsearch 100000 --factor 4   # one, as JSON
 
 Nothing here is tuned to favour any library. meshsearch is given a cell side
 that is a stated multiple of the mean separation, and every structure is built

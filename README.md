@@ -28,6 +28,38 @@ That produces the static library `libmeshsearch.a`, the test binary and the
 example. CI configures, builds and tests on Ubuntu and macOS on every push;
 locally it is also built with GCC 13, 14, 15 and 16, and with AppleClang 15.
 
+The test binary and the example are built only when meshsearch is the top-level
+project, not when it is included by another one.
+
+### Using it from CMake
+
+Install it, then find it as a package:
+
+```
+cmake --install build --prefix /path/to/prefix
+```
+
+```cmake
+find_package(meshsearch 0.2 CONFIG REQUIRED)
+target_link_libraries(your_target PRIVATE meshsearch::meshsearch)
+```
+
+Configure your project with `-DCMAKE_PREFIX_PATH=/path/to/prefix` if the prefix
+is not a standard one. Or build it as part of your project, with the same
+target name:
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(meshsearch
+  GIT_REPOSITORY https://github.com/SimoSartori/meshsearch.git
+  GIT_TAG        v0.2.0)
+FetchContent_MakeAvailable(meshsearch)
+target_link_libraries(your_target PRIVATE meshsearch::meshsearch)
+```
+
+`MESHSEARCH_INSTALL` (on by default) controls whether meshsearch adds its
+install rules to the build that includes it.
+
 A version of this code is distributed as part of the
 [CosmoBolognaLib](https://github.com/federicomarulli/CosmoBolognaLib)
 (Marulli, Veropalumbo & Moresco 2016, A&C, 14, 35), where it was
@@ -80,6 +112,14 @@ for `nearestObject` and `nearestObjects`. The point-taking overloads have no
 identity to exclude, so an object lying on the query point is simply within the
 radius and is returned.
 
+The constructor checks its input before allocating anything. It raises
+`meshsearch::Error` for a cellsize that is not finite and positive, for limits
+that are not finite or have `lo > hi`, for a coordinate that is not finite, and
+for a grid too large to count: more than 2147483647 cells along an axis, or
+more than 4294967295 objects. Running out of memory is not translated: it is
+`std::bad_alloc` in C++ and `MemoryError` in Python, and an `addObject` that
+fails that way leaves the grid as it was.
+
 Const members may be called concurrently on one grid; non-const members may
 not.
 <!-- docs:concepts-end -->
@@ -101,7 +141,7 @@ not.
 
 The cell side is the one tuning parameter. Two to three mean separations is a
 reasonable default, one mean separation favours nearest-neighbour queries, and
-three to four favours shells; `python docs/benchmark_cellsize.py --sweep`
+three to four favours shells; `python benchmarks/benchmark_cellsize.py --sweep`
 repeats the sweep on your own data.
 
 ## Python

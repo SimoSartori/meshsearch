@@ -23,6 +23,34 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+      - name: Every translation unit is compiled without FP contraction
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          entries = json.load(open("build/compile_commands.json"))
+          bad = [e["file"] for e in entries
+                 if "-ffp-contract=off" not in e.get("command", " ".join(e.get("arguments", [])))]
+          print(len(entries), "translation units;", len(bad), "without -ffp-contract=off")
+          sys.exit(1 if bad or not entries else 0)
+          PY
+
+      - name: Install
+        run: cmake --install build --prefix "$RUNNER_TEMP/prefix"
+
+      # find_package(meshsearch CONFIG) against the installed tree
+      - name: Consume the installed package
+        run: |
+          cmake -S tests/cmake/install -B build-install-consumer -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/prefix"
+          cmake --build build-install-consumer
+          ./build-install-consumer/consumer
+
+      # add_subdirectory on the source tree: no tests, no example, no build type
+      - name: Consume the source tree as a subproject
+        run: |
+          cmake -S tests/cmake/subproject -B build-subproject-consumer -DMESHSEARCH_SOURCE_DIR="$GITHUB_WORKSPACE"
+          cmake --build build-subproject-consumer
+          ./build-subproject-consumer/consumer
+
   python:
     name: python module on ubuntu-latest
     runs-on: ubuntu-latest
@@ -43,3 +71,19 @@ jobs:
 
       - name: Test
         run: pytest tests/test_meshgrid.py
+
+      # The library is linked into the module with hidden visibility, so the
+      # module's dynamic symbol table holds none of its C++ symbols.
+      - name: The module exports no meshsearch symbol
+        run: |
+          module=$(python -c "import meshsearch; print(meshsearch.__file__)")
+          if nm -D --defined-only "$module" | c++filt | grep "meshsearch::"; then
+            exit 1
+          fi
+
+      # The C++ install rules are off under scikit-build-core.
+      - name: The wheel installs no C++ library or header
+        run: |
+          if pip show -f meshsearch | grep -E '\.(a|h)$'; then
+            exit 1
+          fi

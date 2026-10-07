@@ -7,10 +7,10 @@ holds 8 entries per cell, so the cell count and the memory with it fall as the
 cube of the factor. The radius is held at twice the mean separation so that the
 answer stays the same size, about 33 neighbours, at every cell side.
 
-The tables this produces are in benchmark.md, which reads them.
+The tables this produces are in docs/benchmark.md, which reads them.
 
-    python docs/benchmark_cellsize.py --sweep          # every size and cell side
-    python docs/benchmark_cellsize.py --one-sweep 1000000 3   # one, as JSON
+    python benchmarks/benchmark_cellsize.py --sweep          # every size and cell side
+    python benchmarks/benchmark_cellsize.py --one-sweep 1000000 3   # one, as JSON
 """
 
 import argparse
