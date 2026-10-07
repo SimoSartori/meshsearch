@@ -28,6 +28,12 @@ data and grows each side to a whole number of cells — so `get_lims` (`lims` in
 Python) can report a box slightly wider than the points, and a point just
 outside the data range may still be accepted.
 
+An axis along which the box has no extent — every point at the same coordinate,
+or limits with `lo == hi` — gets one cell, and the box is grown to one cell side
+around it. Flat and needle-shaped point sets are therefore accepted. A box that
+cannot be counted is refused with an error instead: more than 2147483647 cells
+along one axis, which a cell side tiny against the box would ask for.
+
 ## Batched queries, and the form they return
 
 ```{include} ../README.md

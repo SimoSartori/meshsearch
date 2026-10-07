@@ -25,7 +25,8 @@ namespace meshsearch {
   };
 
 
-  /// Cell offset relative to a target cell.
+  /// Cell offset relative to a target cell. Implementation detail, not part
+  /// of the interface.
   struct GridOffset {
     int i;  ///< offset along x, in cells
     int j;  ///< offset along y, in cells
@@ -46,6 +47,13 @@ namespace meshsearch {
    *
    *  Coordinates, cellsize and radii must all be in the same unit; none is
    *  imposed.
+   *
+   *  Any member that allocates may throw std::bad_alloc, which is not
+   *  translated into Error. A constructor that throws builds nothing, and
+   *  addObject leaves the grid as it was if it throws.
+   *
+   *  GridOffset and the protected members are implementation details: they
+   *  are not part of the interface and may change between versions.
    */
   class MeshGrid {
 
@@ -59,16 +67,28 @@ namespace meshsearch {
     /**
      *  @brief Build the grid.
      *  @param X,Y,Z coordinates, all of the same length, copied into the grid
-     *  @param cellsize cell side; one to four mean separations of the data is
-     *    the usual range, and docs/benchmark.md measures what it costs
-     *  @param limits box as {{xlo,xhi},{ylo,yhi},{zlo,zhi}}; if empty, the data
-     *    range padded by a margin proportional to it
-     *  @throw Error if the vectors differ in length, if cellsize is not
-     *    positive, if limits is not 3x2, or if a coordinate lies outside limits
+     *  @param cellsize cell side, finite and positive; one to four mean
+     *    separations of the data is the usual range, and docs/benchmark.md
+     *    measures what it costs
+     *  @param limits box as {{xlo,xhi},{ylo,yhi},{zlo,zhi}}, finite, with
+     *    lo <= hi on each axis; if empty, the data range padded by a margin
+     *    proportional to it
+     *  @throw Error if the vectors differ in length; if cellsize is not finite
+     *    and positive; if limits is not 3x2, not finite, or has lo > hi on an
+     *    axis; if a coordinate is not finite or lies outside limits; if the
+     *    grid would need more than 2147483647 cells along an axis, or more
+     *    cells or memory than 64-bit sizes can count; or if there are more
+     *    than 4294967295 objects
      *
      *  Each side of the box is grown symmetrically to a whole number of cells.
      *  get_lims returns the grown box, and members validate points against it,
      *  so a point outside @p limits may still be accepted.
+     *
+     *  An axis of zero extent, where every coordinate is equal or lo == hi,
+     *  gets one cell, and the box is grown symmetrically around it to one
+     *  cellsize.
+     *
+     *  Every check is made before anything is allocated.
      */
     MeshGrid (const std::vector<double>& X,
               const std::vector<double>& Y,
@@ -208,7 +228,8 @@ namespace meshsearch {
     /**
      *  @brief Add an object to the grid.
      *  @return its index, one past the highest ever issued
-     *  @throw Error if the point is outside the box
+     *  @throw Error if the point is outside the box, or if 4294967295 indices
+     *    have already been issued
      *
      *  The box is not refitted. Indices of removed objects are not reused, so
      *  their storage is not reclaimed.

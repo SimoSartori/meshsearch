@@ -148,7 +148,12 @@ NB_MODULE(meshsearch, m)
          "Build the grid over the points, which must be of equal length.\n"
          "limits is ((xlo,xhi),(ylo,yhi),(zlo,zhi)); when omitted, the data\n"
          "range padded by a margin proportional to it. Each side of the box\n"
-         "is grown symmetrically to a whole number of cells.")
+         "is grown symmetrically to a whole number of cells; an axis of zero\n"
+         "extent gets one cell.\n\n"
+         "Raises meshsearch.Error for a cellsize that is not finite and\n"
+         "positive, limits that are not finite or have lo > hi, a coordinate\n"
+         "that is not finite or outside limits, or a grid too large to count;\n"
+         "MemoryError if the grid cannot be allocated.")
 
     .def("__len__", &meshsearch::MeshGrid::get_nObjects,
          "Number of objects in the grid, excluding removed ones.")

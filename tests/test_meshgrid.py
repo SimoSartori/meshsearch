@@ -740,3 +740,118 @@ def test_a_wide_shell_at_large_rmin():
                                [10.0, 17.0 - 1e-9], 1.0, [[0.0, 40.0]] * 3)
     assert grid.close_objects(10.0, 10.0, 10.0, 12.2, 12.0).tolist() == [1]
     assert grid.close_objects(0, 12.2, 12.0).tolist() == [1]
+
+
+# --------------------------------------------------------------------------
+# constructor validation, zero-extent axes, and grids too large to count;
+# the same guarantees as the C++ groups testConstructorValidation,
+# testZeroExtent, testCountLimits and testLongAxis
+
+
+NAN, INF = float("nan"), float("inf")
+SMALL = ([1.0, 2.0, 3.0], [1.0, 2.0, 3.0], [1.0, 2.0, 3.0])
+SMALL_BOX = [[0.0, 4.0], [0.0, 4.0], [0.0, 4.0]]
+
+
+def raises_plain_error(build):
+    with pytest.raises(meshsearch.Error) as caught:
+        build()
+    assert not isinstance(caught.value, meshsearch.IndexError)
+
+
+@pytest.mark.parametrize("cellsize", [INF, -INF, NAN, 0.0, -1.0])
+def test_a_cellsize_not_finite_and_positive_raises(cellsize):
+    raises_plain_error(lambda: meshsearch.MeshGrid(*SMALL, cellsize, SMALL_BOX))
+    raises_plain_error(lambda: meshsearch.MeshGrid(*SMALL, cellsize))
+
+
+@pytest.mark.parametrize("bad", [NAN, INF, -INF])
+@pytest.mark.parametrize("end", [0, 1])
+@pytest.mark.parametrize("axis", [0, 1, 2])
+def test_limits_not_finite_raise(axis, end, bad):
+    limits = [list(side) for side in SMALL_BOX]
+    limits[axis][end] = bad
+    raises_plain_error(lambda: meshsearch.MeshGrid(*SMALL, 1.0, limits))
+    raises_plain_error(lambda: meshsearch.MeshGrid([], [], [], 1.0, limits))
+
+
+@pytest.mark.parametrize("axis", [0, 1, 2])
+def test_inverted_limits_raise(axis):
+    limits = [list(side) for side in SMALL_BOX]
+    limits[axis] = [4.0, 0.0]
+    raises_plain_error(lambda: meshsearch.MeshGrid(*SMALL, 1.0, limits))
+    raises_plain_error(lambda: meshsearch.MeshGrid([], [], [], 1.0, limits))
+
+
+@pytest.mark.parametrize("bad", [NAN, INF, -INF])
+@pytest.mark.parametrize("axis", [0, 1, 2])
+def test_a_coordinate_not_finite_raises(axis, bad):
+    coords = [list(c) for c in SMALL]
+    coords[axis][1] = bad
+    raises_plain_error(lambda: meshsearch.MeshGrid(*coords, 1.0, SMALL_BOX))
+    raises_plain_error(lambda: meshsearch.MeshGrid(*coords, 1.0))
+
+
+# Points all equal along one axis (flat) or two (needle), built with no limits
+# and with lo == hi limits: one cell on each such axis, a box one cellsize wide
+# centred on it, and the same answers as brute force.
+@pytest.mark.parametrize("flat_axes", [1, 2])
+def test_a_zero_extent_axis_gets_one_cell(flat_axes):
+    rng = np.random.default_rng(31337)
+    level, cellsize, n = 0.37, 0.1, 800
+    X = rng.random(n)
+    Y = np.full(n, level) if flat_axes == 2 else rng.random(n)
+    Z = np.full(n, level)
+    alive = np.ones(n, dtype=bool)
+    limits = [[0.0, 1.0], [level, level] if flat_axes == 2 else [0.0, 1.0], [level, level]]
+
+    for grid in (meshsearch.MeshGrid(X, Y, Z, cellsize),
+                 meshsearch.MeshGrid(X, Y, Z, cellsize, limits)):
+        for axis in range(3 - flat_axes, 3):
+            assert grid.n_cells[axis] == 1
+            assert grid.lims[axis][0] == pytest.approx(level - cellsize / 2)
+            assert grid.lims[axis][1] == pytest.approx(level + cellsize / 2)
+
+        for _ in range(40):
+            x = rng.uniform(grid.lims[0][0], grid.lims[0][1])
+            y = level if flat_axes == 2 else rng.uniform(grid.lims[1][0], grid.lims[1][1])
+            got = grid.nearest_object(x, y, level)
+            assert distances(x, y, level, X[got], Y[got], Z[got]) == pytest.approx(
+                brute_nearest(x, y, level, X, Y, Z, alive))
+            got = set(grid.close_objects(x, y, level, 0.08).tolist())
+            assert got == brute_shell(x, y, level, X, Y, Z, alive, 0.08, 0.0)
+
+
+# Each would need terabytes or more; raising at all, quickly and without
+# MemoryError, shows that the counts are checked before anything is allocated.
+@pytest.mark.parametrize("limits,cellsize", [
+    (SMALL_BOX, 1e-300),
+    ([[0.0, 2147483648.0], [0.0, 1.0], [0.0, 1.0]], 1.0),
+    ([[0.0, 4194304.0]] * 3, 1.0),
+])
+def test_a_grid_too_large_to_count_raises(limits, cellsize):
+    raises_plain_error(lambda: meshsearch.MeshGrid([], [], [], cellsize, limits))
+
+
+# 46341 cells along x: past the 32-bit threshold where 0.1.0's offset
+# arithmetic overflowed, in a grid of a few MB. Two points at the two ends make
+# the nearest-object search walk the whole length.
+def test_a_long_axis_past_the_32_bit_threshold():
+    length = 46341.0
+    limits = [[0.0, length], [0.0, 1.0], [0.0, 1.0]]
+    rng = np.random.default_rng(46341)
+    X, Y, Z = rng.uniform(0, length, 3000), rng.random(3000), rng.random(3000)
+    alive = np.ones(3000, dtype=bool)
+    grid = meshsearch.MeshGrid(X, Y, Z, 1.0, limits)
+    assert grid.n_cells[0] == 46341
+    for _ in range(20):
+        x, y, z = rng.uniform(0, length), rng.random(), rng.random()
+        got = grid.nearest_object(x, y, z)
+        assert distances(x, y, z, X[got], Y[got], Z[got]) == pytest.approx(
+            brute_nearest(x, y, z, X, Y, Z, alive))
+        assert set(grid.close_objects(x, y, z, 40.0).tolist()) == brute_shell(
+            x, y, z, X, Y, Z, alive, 40.0, 0.0)
+
+    ends = meshsearch.MeshGrid([0.25, length - 0.25], [0.5, 0.5], [0.5, 0.5], 1.0, limits)
+    assert ends.nearest_object(0) == 1
+    assert ends.nearest_object(1) == 0

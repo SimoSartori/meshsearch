@@ -594,6 +594,202 @@ namespace {
     printf("  degenerate and extreme extents: ok\n");
   }
 
+  // The constructor's input checks: every input the header names as invalid
+  // raises Error, on each axis and at each end, whether the box is given or
+  // fitted to the points. A NaN must be refused as well as an infinity, since
+  // every comparison with it is false and a check written as a comparison
+  // would let it through.
+  void testConstructorValidation ()
+  {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+    const std::vector<double> X = {1., 2., 3.};
+    const std::vector<double> Y = {1., 2., 3.};
+    const std::vector<double> Z = {1., 2., 3.};
+    const std::vector<std::vector<double>> lims = {{0., 4.}, {0., 4.}, {0., 4.}};
+
+    for (const double cellsize : {inf, -inf, nan, 0., -1.}) {
+      ASSERT_THROWS_PLAIN(MeshGrid(X, Y, Z, cellsize, lims));
+      ASSERT_THROWS_PLAIN(MeshGrid(X, Y, Z, cellsize));
+    }
+
+    for (int axis=0; axis<3; ++axis)
+      for (int end=0; end<2; ++end)
+        for (const double bad : {nan, inf, -inf}) {
+          auto badLims = lims;
+          badLims[axis][end] = bad;
+          ASSERT_THROWS_PLAIN(MeshGrid(X, Y, Z, 1., badLims));
+          ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, 1., badLims));
+        }
+
+    for (int axis=0; axis<3; ++axis) {
+      auto inverted = lims;
+      inverted[axis] = {4., 0.};
+      ASSERT_THROWS_PLAIN(MeshGrid(X, Y, Z, 1., inverted));
+      ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, 1., inverted));
+    }
+
+    for (int axis=0; axis<3; ++axis)
+      for (const double bad : {nan, inf, -inf}) {
+        std::vector<std::vector<double>> coords = {X, Y, Z};
+        coords[axis][1] = bad;
+        ASSERT_THROWS_PLAIN(MeshGrid(coords[0], coords[1], coords[2], 1., lims));
+        ASSERT_THROWS_PLAIN(MeshGrid(coords[0], coords[1], coords[2], 1.));
+      }
+
+    ASSERT_OK(MeshGrid(X, Y, Z, 1., {{0., 4.}, {0., 4.}, {0., 4.}}));
+    ASSERT_OK(MeshGrid({}, {}, {}, 1., {{2., 2.}, {0., 4.}, {0., 4.}}));
+
+    printf("  constructor input validation: ok\n");
+  }
+
+
+  // An axis of zero extent gets one cell and a box one cellsize wide centred
+  // on it, as the header states, and the grid still answers every query as
+  // brute force does. Built both ways the header names: points that are all
+  // equal along the axis with no limits, and limits with lo == hi. A flat
+  // cloud has one such axis, a needle two.
+  void testZeroExtent ()
+  {
+    const double cellsize = 0.1;
+    const double level = 0.37;
+    std::mt19937 gen(31337u);
+    std::uniform_real_distribution<double> unit(0., 1.);
+
+    for (int flatAxes=1; flatAxes<=2; ++flatAxes) {
+      Cloud cloud;
+      for (int n=0; n<800; ++n) {
+        cloud.X.push_back(unit(gen));
+        cloud.Y.push_back(flatAxes == 2 ? level : unit(gen));
+        cloud.Z.push_back(level);
+      }
+      cloud.alive.assign(cloud.size(), 1);
+
+      const std::vector<std::vector<double>> lims =
+        {{0., 1.}, flatAxes == 2 ? std::vector<double>{level, level} : std::vector<double>{0., 1.}, {level, level}};
+
+      const MeshGrid fitted(cloud.X, cloud.Y, cloud.Z, cellsize);
+      const MeshGrid given(cloud.X, cloud.Y, cloud.Z, cellsize, lims);
+
+      for (const MeshGrid* grid : {&fitted, &given}) {
+        for (int axis=3-flatAxes; axis<3; ++axis) {
+          assert(grid->get_nCells()[axis] == 1);
+          const auto box = grid->get_lims();
+          assert(std::fabs(box[axis][0]-(level-cellsize/2.)) < tol);
+          assert(std::fabs(box[axis][1]-(level+cellsize/2.)) < tol);
+        }
+
+        const auto box = grid->get_lims();
+        std::uniform_real_distribution<double> alongX(box[0][0], box[0][1]);
+        std::uniform_real_distribution<double> alongY(box[1][0], box[1][1]);
+        std::uniform_int_distribution<unsigned int> pick(0, (unsigned int)cloud.size()-1);
+        for (int q=0; q<60; ++q) {
+          const double x = alongX(gen);
+          const double y = (flatAxes == 2) ? level : alongY(gen);
+          checkNearest(*grid, cloud, x, y, level, -1);
+          checkNearestN(*grid, cloud, 7, x, y, level, -1);
+          checkShell(*grid, cloud, x, y, level, 0.08, 0., -1);
+          checkShell(*grid, cloud, x, y, level, 0.2, 0.1, -1);
+
+          const unsigned int index = pick(gen);
+          checkNearest(*grid, cloud, cloud.X[index], cloud.Y[index], cloud.Z[index], (long)index);
+          checkNearestN(*grid, cloud, 7, cloud.X[index], cloud.Y[index], cloud.Z[index], (long)index);
+          checkShell(*grid, cloud, cloud.X[index], cloud.Y[index], cloud.Z[index], 0.08, 0., (long)index);
+        }
+      }
+    }
+
+    printf("  zero-extent axes, flat and needle: ok\n");
+  }
+
+
+  // A grid too large to count is refused with Error, and refused before
+  // anything is allocated: each of these would need from terabytes to far more
+  // memory than exists, so reaching the end of this group at all, quickly and
+  // without std::bad_alloc, is what shows the checks come first. The cases are
+  // a cellsize tiny against the box, one axis a single cell past 2147483647,
+  // and 2^22 cells on every axis, whose 2^66 cells overflow a 64-bit count
+  // although each axis is well within its own limit.
+  void testCountLimits ()
+  {
+    const std::vector<std::vector<double>> unitBox = {{0., 1.}, {0., 1.}, {0., 1.}};
+    ASSERT_THROWS_PLAIN(MeshGrid({0.5}, {0.5}, {0.5}, 1.e-300, unitBox));
+    ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, 1.e-300, unitBox));
+
+    const double pastIntMax = 2147483648.;
+    ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, 1., {{0., pastIntMax}, {0., 1.}, {0., 1.}}));
+    ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, 1., {{0., 1.}, {0., 1.}, {0., pastIntMax}}));
+
+    const double side = 4194304.;
+    ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, 1., {{0., side}, {0., side}, {0., side}}));
+
+    const double huge = 1.e308;
+    ASSERT_THROWS_PLAIN(MeshGrid({-huge, huge}, {0., 1.}, {0., 1.}, 1.));
+
+    printf("  grids too large to count: ok\n");
+  }
+
+
+  // A needle of 46341 x 1 x 1 cells. 46341^2 exceeds the largest 32-bit
+  // signed integer, which is where 0.1.0's cell-offset arithmetic overflowed;
+  // the grid itself is small (a few MB), so this is the cheapest grid on the
+  // far side of that threshold. Two clouds: a few thousand points along the
+  // needle, and two points at its two ends, which forces the nearest-object
+  // searches to walk the whole length and so to use the offsets whose squared
+  // length is past the threshold.
+  void testLongAxis ()
+  {
+    const double length = 46341.;
+    const std::vector<std::vector<double>> lims = {{0., length}, {0., 1.}, {0., 1.}};
+    std::mt19937 gen(46341u);
+    std::uniform_real_distribution<double> along(0., length);
+    std::uniform_real_distribution<double> unit(0., 1.);
+
+    Cloud cloud;
+    for (int n=0; n<3000; ++n) {
+      cloud.X.push_back(along(gen));
+      cloud.Y.push_back(unit(gen));
+      cloud.Z.push_back(unit(gen));
+    }
+    cloud.alive.assign(cloud.size(), 1);
+
+    const MeshGrid grid(cloud.X, cloud.Y, cloud.Z, 1., lims);
+    assert(grid.get_nCells()[0] == 46341);
+
+    for (int q=0; q<40; ++q) {
+      const double x = along(gen), y = unit(gen), z = unit(gen);
+      checkNearest(grid, cloud, x, y, z, -1);
+      checkNearestN(grid, cloud, 9, x, y, z, -1);
+      checkShell(grid, cloud, x, y, z, 40., 0., -1);
+      checkShell(grid, cloud, x, y, z, 30000., 20000., -1);
+    }
+    checkShell(grid, cloud, 0., 0.5, 0.5, std::numeric_limits<double>::infinity(), 46000., -1);
+
+    Cloud ends;
+    ends.X = {0.25, length-0.25};
+    ends.Y = {0.5, 0.5};
+    ends.Z = {0.5, 0.5};
+    ends.alive.assign(2, 1);
+
+    const MeshGrid sparse(ends.X, ends.Y, ends.Z, 1., lims);
+    assert(sparse.nearestObject(0u) == 1);
+    assert(sparse.nearestObject(1u) == 0);
+    checkNearest(sparse, ends, 1., 0.5, 0.5, -1);
+    checkNearestN(sparse, ends, 2, 1., 0.5, 0.5, -1);
+    checkNearestN(sparse, ends, 1, ends.X[0], ends.Y[0], ends.Z[0], 0);
+    checkShell(sparse, ends, 0., 0.5, 0.5, length+1., length-1., -1);
+
+    printf("  a 46341-cell axis, past the 32-bit offset threshold: ok\n");
+  }
+
+
+  // Not tested here, because no test can reach them at a reasonable cost:
+  // the 4294967295-object limit of the constructor and of addObject, which
+  // needs that many objects, and addObject leaving the grid unchanged when an
+  // allocation fails, which needs an allocator the grid does not let a test
+  // replace. Both are covered by review.
+
+
   // The Rmax layer bound, swept across the ratio that drives it. A layer L
   // guarantees a minimum distance of L cell sides, so the bound scans layers 0
   // to floor(Rmax/cellsize) and no further. The ratio is what decides how many
@@ -953,6 +1149,10 @@ int main ()
   testRminBoundary();
   testDuplicates();
   testDegenerateExtents();
+  testConstructorValidation();
+  testZeroExtent();
+  testCountLimits();
+  testLongAxis();
   testWideShells();
   testShellRadiusSweep();
   testTightestScannedLayer();

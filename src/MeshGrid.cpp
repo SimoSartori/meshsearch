@@ -2,12 +2,25 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <queue>
+#include <string>
 
 namespace {
 
   const double padding_factor = 1.e-6;
+
+  const char* const axis_names[3] = {"X", "Y", "Z"};
+
+  const unsigned int max_objects = std::numeric_limits<unsigned int>::max();
+
+  bool checkedProduct (const std::uint64_t a, const std::uint64_t b, std::uint64_t& out)
+  {
+    if (a != 0 && b > std::numeric_limits<std::uint64_t>::max()/a) return false;
+    out = a*b;
+    return true;
+  }
 
   struct PartNode {
     double dist_sq;
@@ -83,89 +96,122 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
 {
   if (X.size() != Y.size() || X.size() != Z.size())
     throw Error("the coordinate vectors differ in length");
-  if (!(cellsize > 0.))
-    throw Error("cellsize must be positive");
+  if (!(std::isfinite(cellsize) && cellsize > 0.))
+    throw Error("cellsize must be positive and finite");
+  if (X.size() > max_objects)
+    throw Error("too many objects: at most 4294967295 are supported");
 
-  m_cellsize = cellsize;
+  const std::vector<double>* axes[3] = {&X, &Y, &Z};
+  for (int i=0; i<3; ++i)
+    for (size_t k=0; k<axes[i]->size(); ++k)
+      if (!std::isfinite((*axes[i])[k]))
+        throw Error(std::string(axis_names[i])+" coordinate "+std::to_string(k)+" is not finite");
 
-  std::vector<std::vector<double>> temp_lims(3, std::vector<double>(2));
+  double lo[3], hi[3];
 
   if (limits.empty()) {
     if (X.empty())
       throw Error("an empty set of coordinates requires explicit limits");
 
-    const std::vector<double>* coords[3] = {&X, &Y, &Z};
     for (int i=0; i<3; ++i) {
-      const auto range = std::minmax_element(coords[i]->begin(), coords[i]->end());
-      const double lo = *range.first;
-      const double hi = *range.second;
-      const double pad = padding_factor*(hi-lo);
-      temp_lims[i][0] = lo-pad;
-      temp_lims[i][1] = hi+pad;
+      const auto range = std::minmax_element(axes[i]->begin(), axes[i]->end());
+      const double pad = padding_factor*(*range.second-*range.first);
+      lo[i] = *range.first-pad;
+      hi[i] = *range.second+pad;
     }
   }
   else {
     if (limits.size() != 3 || limits[0].size() != 2 || limits[1].size() != 2 || limits[2].size() != 2)
       throw Error("the limits matrix must be 3x2");
 
+    for (int i=0; i<3; ++i) {
+      if (!std::isfinite(limits[i][0]) || !std::isfinite(limits[i][1]))
+        throw Error("the limits must be finite");
+      if (limits[i][0] > limits[i][1])
+        throw Error(std::string(axis_names[i])+" limits are inverted (lo > hi)");
+    }
+
     if (!X.empty()) {
-      const std::vector<double>* coords[3] = {&X, &Y, &Z};
-      const char* names[3] = {"X", "Y", "Z"};
       for (int i=0; i<3; ++i) {
-        const auto range = std::minmax_element(coords[i]->begin(), coords[i]->end());
+        const auto range = std::minmax_element(axes[i]->begin(), axes[i]->end());
         if (*range.first < limits[i][0] || *range.second > limits[i][1])
-          throw Error(std::string(names[i])+" coordinate outside the limits");
+          throw Error(std::string(axis_names[i])+" coordinate outside the limits");
       }
     }
 
-    temp_lims = limits;
+    for (int i=0; i<3; ++i) {
+      lo[i] = limits[i][0];
+      hi[i] = limits[i][1];
+    }
   }
 
+  std::array<unsigned int, 3> nCells;
   for (int i=0; i<3; ++i) {
-    const double range = temp_lims[i][1]-temp_lims[i][0];
-    const double n = std::ceil(range/m_cellsize);
-    m_nCells[i] = (n >= 1.) ? static_cast<unsigned int>(n) : 1;
+    const double n = std::ceil((hi[i]-lo[i])/cellsize);
+    if (!(n <= double(std::numeric_limits<int>::max())))
+      throw Error("the grid would need more than 2147483647 cells along "+std::string(axis_names[i]));
+    nCells[i] = (n >= 1.) ? static_cast<unsigned int>(n) : 1;
   }
 
-  m_lims.assign(3, std::vector<double>(2));
+  double grownLo[3], grownHi[3];
   for (int i=0; i<3; ++i) {
-    const double range = temp_lims[i][1]-temp_lims[i][0];
-    const double grid_span = m_nCells[i]*m_cellsize;
+    const double range = hi[i]-lo[i];
+    const double grid_span = nCells[i]*cellsize;
     const double offset = (grid_span-range)/2.;
 
-    m_lims[i][0] = temp_lims[i][0]-offset;
-    m_lims[i][1] = temp_lims[i][1]+offset;
+    grownLo[i] = lo[i]-offset;
+    grownHi[i] = hi[i]+offset;
+    if (!std::isfinite(grownLo[i]) || !std::isfinite(grownHi[i]))
+      throw Error("the box is too large to represent");
   }
+
+  const std::uint64_t nx = nCells[0], ny = nCells[1], nz = nCells[2];
+  const char* const too_many_cells = "the grid would need more cells than 64-bit sizes can count or address";
+
+  std::uint64_t total = 0, entries = 0;
+  if (!checkedProduct(nx, ny, total) || !checkedProduct(total, nz, total) || !checkedProduct(total, 8, entries))
+    throw Error(too_many_cells);
+  if (total >= std::vector<size_t>().max_size() || total > std::vector<std::vector<unsigned int>>().max_size()
+      || entries > std::vector<GridOffset>().max_size())
+    throw Error(too_many_cells);
+
+  m_cellsize = cellsize;
+  m_nCells = nCells;
+  m_lims = {{grownLo[0], grownHi[0]}, {grownLo[1], grownHi[1]}, {grownLo[2], grownHi[2]}};
 
   const int nCx = static_cast<int>(m_nCells[0]);
   const int nCy = static_cast<int>(m_nCells[1]);
   const int nCz = static_cast<int>(m_nCells[2]);
 
+  const std::uint64_t sum_sq = nx*nx+ny*ny+nz*nz;
   const unsigned int dim_mask = static_cast<unsigned int>
-    (std::ceil(std::sqrt(3.)+std::sqrt(double(nCx*nCx+nCy*nCy+nCz*nCz))));
+    (std::ceil(std::sqrt(3.)+std::sqrt(double(sum_sq))));
 
   auto mask = std::make_shared<std::vector<std::vector<GridOffset>>>(dim_mask);
 
   for (int i=-nCx; i<nCx; ++i) {
     const int abs_i = std::abs(i);
-    const int dx = (abs_i > 0) ? abs_i-1 : 0;
-    const int dx2 = dx*dx;
+    const std::uint64_t dx = (abs_i > 0) ? abs_i-1 : 0;
+    const std::uint64_t dx2 = dx*dx;
     for (int j=-nCy; j<nCy; ++j) {
       const int abs_j = std::abs(j);
-      const int dy = (abs_j > 0) ? abs_j-1 : 0;
-      const int dy2 = dy*dy;
+      const std::uint64_t dy = (abs_j > 0) ? abs_j-1 : 0;
+      const std::uint64_t dy2 = dy*dy;
       for (int k=-nCz; k<nCz; ++k) {
         const int abs_k = std::abs(k);
-        const int dz = (abs_k > 0) ? abs_k-1 : 0;
-        const unsigned int indexes = static_cast<unsigned int>(std::floor(std::sqrt(double(dx2+dy2+dz*dz))));
-        if (indexes < dim_mask) (*mask)[indexes].push_back({i, j, k});
+        const std::uint64_t dz = (abs_k > 0) ? abs_k-1 : 0;
+        const std::uint64_t sum = dx2+dy2+dz*dz;
+        std::uint64_t root = static_cast<std::uint64_t>(std::floor(std::sqrt(double(sum))));
+        while (root*root > sum) --root;
+        while ((root+1)*(root+1) <= sum) ++root;
+        if (root < dim_mask) (*mask)[static_cast<size_t>(root)].push_back({i, j, k});
       }
     }
   }
 
   m_mask = mask;
 
-  const size_t total_cells = size_t(m_nCells[0])*size_t(m_nCells[1])*size_t(m_nCells[2]);
+  const size_t total_cells = static_cast<size_t>(total);
   m_grid.assign(total_cells, std::vector<unsigned int>());
 
   const size_t n = X.size();
@@ -293,9 +339,9 @@ unsigned int meshsearch::MeshGrid::nearestObject (const double X, const double Y
     if (layer_dist*layer_dist >= min_dist_sq) break;
 
     for (const auto& offset : (*m_mask)[maskInd]) {
-      const int currX = targetX+offset.i;
-      const int currY = targetY+offset.j;
-      const int currZ = targetZ+offset.k;
+      const std::int64_t currX = std::int64_t(targetX)+offset.i;
+      const std::int64_t currY = std::int64_t(targetY)+offset.j;
+      const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
       if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
         for (const auto& part_idx : m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))]) {
           const double dx = m_X[part_idx]-X;
@@ -350,9 +396,9 @@ unsigned int meshsearch::MeshGrid::nearestObject (const unsigned int index) cons
     if (layer_dist*layer_dist >= min_dist_sq) break;
 
     for (const auto& offset : (*m_mask)[maskInd]) {
-      const int currX = targetX+offset.i;
-      const int currY = targetY+offset.j;
-      const int currZ = targetZ+offset.k;
+      const std::int64_t currX = std::int64_t(targetX)+offset.i;
+      const std::int64_t currY = std::int64_t(targetY)+offset.j;
+      const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
       if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
         for (const auto& part_idx : m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))]) {
           if (part_idx == self) continue;
@@ -405,9 +451,9 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
     }
 
     for (const auto& offset : (*m_mask)[maskInd]) {
-      const int currX = targetX+offset.i;
-      const int currY = targetY+offset.j;
-      const int currZ = targetZ+offset.k;
+      const std::int64_t currX = std::int64_t(targetX)+offset.i;
+      const std::int64_t currY = std::int64_t(targetY)+offset.j;
+      const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
       if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
         for (const auto& part_idx : m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))]) {
           const double dx = m_X[part_idx]-X;
@@ -469,9 +515,9 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
     }
 
     for (const auto& offset : (*m_mask)[maskInd]) {
-      const int currX = targetX+offset.i;
-      const int currY = targetY+offset.j;
-      const int currZ = targetZ+offset.k;
+      const std::int64_t currX = std::int64_t(targetX)+offset.i;
+      const std::int64_t currY = std::int64_t(targetY)+offset.j;
+      const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
       if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
         for (const auto& part_idx : m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))]) {
           if (part_idx == self) continue;
@@ -537,9 +583,9 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const double X, co
     if (layer_dist*layer_dist > Rmax_sq) break;
 
     for (const auto& offset : (*m_mask)[maskInd]) {
-      const int currX = targetX+offset.i;
-      const int currY = targetY+offset.j;
-      const int currZ = targetZ+offset.k;
+      const std::int64_t currX = std::int64_t(targetX)+offset.i;
+      const std::int64_t currY = std::int64_t(targetY)+offset.j;
+      const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
       if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
         for (const auto& part_idx : m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))]) {
           const double dx = m_X[part_idx]-X;
@@ -601,9 +647,9 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const unsigned int
     if (layer_dist*layer_dist > Rmax_sq) break;
 
     for (const auto& offset : (*m_mask)[maskInd]) {
-      const int currX = targetX+offset.i;
-      const int currY = targetY+offset.j;
-      const int currZ = targetZ+offset.k;
+      const std::int64_t currX = std::int64_t(targetX)+offset.i;
+      const std::int64_t currY = std::int64_t(targetY)+offset.j;
+      const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
       if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
         for (const auto& part_idx : m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))]) {
           if (part_idx == self) continue;
@@ -680,19 +726,35 @@ void meshsearch::MeshGrid::removeObject (const unsigned int index)
 unsigned int meshsearch::MeshGrid::addObject (const double X, const double Y, const double Z)
 {
   const auto coords = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
+  if (m_toInternal.size() >= max_objects)
+    throw Error("too many objects: at most 4294967295 indices can be issued");
 
   const unsigned int index = static_cast<unsigned int>(m_toInternal.size());
   const unsigned int internal = static_cast<unsigned int>(m_X.size());
 
-  m_X.push_back(X);
-  m_Y.push_back(Y);
-  m_Z.push_back(Z);
-  m_toInternal.push_back(internal);
-  m_toPublic.push_back(index);
-  m_alive.push_back(1);
-  m_nObjects++;
+  auto& cell = m_grid[getLinearIndex(coords[0], coords[1], coords[2])];
 
-  m_grid[getLinearIndex(coords[0], coords[1], coords[2])].push_back(internal);
+  int pushed = 0;
+  try {
+    m_X.push_back(X); ++pushed;
+    m_Y.push_back(Y); ++pushed;
+    m_Z.push_back(Z); ++pushed;
+    m_toInternal.push_back(internal); ++pushed;
+    m_toPublic.push_back(index); ++pushed;
+    m_alive.push_back(1); ++pushed;
+    cell.push_back(internal);
+  }
+  catch (...) {
+    if (pushed > 5) m_alive.pop_back();
+    if (pushed > 4) m_toPublic.pop_back();
+    if (pushed > 3) m_toInternal.pop_back();
+    if (pushed > 2) m_Z.pop_back();
+    if (pushed > 1) m_Y.pop_back();
+    if (pushed > 0) m_X.pop_back();
+    throw;
+  }
+
+  m_nObjects++;
 
   return index;
 }
