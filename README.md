@@ -52,7 +52,7 @@ target name:
 include(FetchContent)
 FetchContent_Declare(meshsearch
   GIT_REPOSITORY https://github.com/SimoSartori/meshsearch.git
-  GIT_TAG        v0.2.0)
+  GIT_TAG        v0.2.1)
 FetchContent_MakeAvailable(meshsearch)
 target_link_libraries(your_target PRIVATE meshsearch::meshsearch)
 ```

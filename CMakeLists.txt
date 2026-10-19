@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(meshsearch VERSION 0.2.0 LANGUAGES CXX)
+project(meshsearch VERSION 0.2.1 LANGUAGES CXX)
 
 # PROJECT_IS_TOP_LEVEL needs CMake 3.21; this is the 3.16 equivalent, true
 # for a standalone build and false under add_subdirectory or FetchContent.
