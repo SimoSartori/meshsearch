@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- `nearestObjects` (both overloads; `nearest_objects` in Python) now orders
+  objects at equal distance by ascending index, and a tie at the N-th place
+  keeps the lower indices. The order of ties used to come from the standard
+  library's heap, so it differed between libc++ and libstdc++. Results for
+  inputs with exactly tied distances change on every compiler; results
+  without ties are unchanged.
+
 ## 0.2.0 — 2026-10-07
 
 ### Fixed

@@ -132,26 +132,31 @@ namespace meshsearch {
     unsigned int nearestObject (unsigned int index) const;
 
     /**
-     *  @brief The @p N objects nearest to a point, nearest first.
+     *  @brief The @p N objects nearest to a point, nearest first; ties by
+     *    ascending index.
      *  @param N at most get_nObjects(); 0 returns an empty vector
      *  @param X,Y,Z the point, which must lie inside the box
      *  @throw Error if the point is outside the box, or if N is too large
      *
      *  Nothing is excluded: an object lying on the point is at distance 0 and
-     *  is among them.
+     *  is among them. The result is the first @p N objects ordered by
+     *  (distance, index), so a tie at the last place keeps the lower indices.
      */
     std::vector<unsigned int> nearestObjects (unsigned int N,
                                               double X, double Y, double Z) const;
 
     /**
-     *  @brief The @p N objects nearest to object @p index, which is excluded.
+     *  @brief The @p N objects nearest to object @p index, which is excluded;
+     *    nearest first; ties by ascending index.
      *  @param N at most get_nObjects()-1; 0 returns an empty vector
      *  @param index the object to measure from, itself excluded
      *  @throw IndexError if @p index is out of range or removed
      *  @throw Error if N is too large
      *
      *  @p index is excluded by identity, not by distance: another object
-     *  coincident with it is at distance 0 and is among them.
+     *  coincident with it is at distance 0 and is among them. The result is
+     *  the first @p N objects ordered by (distance, index), so a tie at the
+     *  last place keeps the lower indices.
      */
     std::vector<unsigned int> nearestObjects (unsigned int N,
                                               unsigned int index) const;

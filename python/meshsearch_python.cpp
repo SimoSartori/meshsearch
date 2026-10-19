@@ -230,9 +230,10 @@ NB_MODULE(meshsearch, m)
            return indexArray2D(std::move(out), queries, n);
          },
          "n"_a, "x"_a, "y"_a, "z"_a,
-         "The n objects nearest to each of an array of points, nearest first:\n"
-         "an (n_query, n) array, rectangular because every query returns\n"
-         "exactly n.")
+         "The n objects nearest to each of an array of points, nearest first;\n"
+         "ties by ascending index: an (n_query, n) array, rectangular because\n"
+         "every query returns exactly n. A tie at the last place keeps the\n"
+         "lower indices.")
 
     .def("nearest_objects",
          [](const meshsearch::MeshGrid& self, const unsigned int n,
@@ -240,16 +241,18 @@ NB_MODULE(meshsearch, m)
            return indexArray(self.nearestObjects(n, x, y, z));
          },
          "n"_a, "x"_a, "y"_a, "z"_a,
-         "The n objects nearest to a point, nearest first.")
+         "The n objects nearest to a point, nearest first; ties by ascending\n"
+         "index. A tie at the last place keeps the lower indices.")
 
     .def("nearest_objects",
          [](const meshsearch::MeshGrid& self, const unsigned int n, const unsigned int index) {
            return indexArray(self.nearestObjects(n, index));
          },
          "n"_a, "index"_a,
-         "The n objects nearest to an object, nearest first. The query object\n"
-         "is excluded by identity, not by distance: another object coincident\n"
-         "with it is at distance 0 and is among them.")
+         "The n objects nearest to an object, nearest first; ties by ascending\n"
+         "index. A tie at the last place keeps the lower indices. The query\n"
+         "object is excluded by identity, not by distance: another object\n"
+         "coincident with it is at distance 0 and is among them.")
 
     .def("close_objects",
          [](const meshsearch::MeshGrid& self, const Coords& x, const Coords& y, const Coords& z,

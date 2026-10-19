@@ -25,7 +25,10 @@ namespace {
   struct PartNode {
     double dist_sq;
     unsigned int index;
-    bool operator< (const PartNode& other) const { return dist_sq < other.dist_sq; }
+    bool operator< (const PartNode& other) const
+    {
+      return dist_sq < other.dist_sq || (dist_sq == other.dist_sq && index < other.index);
+    }
   };
 
   std::array<unsigned int, 3> locate (const std::vector<std::vector<double>>& lims,
@@ -460,10 +463,13 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
           const double dy = m_Y[part_idx]-Y;
           const double dz = m_Z[part_idx]-Z;
           const double dist_sq = dx*dx+dy*dy+dz*dz;
-          if (pq.size() < N) pq.push({dist_sq, part_idx});
-          else if (dist_sq < pq.top().dist_sq) {
-            pq.pop();
-            pq.push({dist_sq, part_idx});
+          if (pq.size() < N) pq.push({dist_sq, m_toPublic[part_idx]});
+          else if (dist_sq <= pq.top().dist_sq) {
+            const PartNode node = {dist_sq, m_toPublic[part_idx]};
+            if (node < pq.top()) {
+              pq.pop();
+              pq.push(node);
+            }
           }
         }
       }
@@ -473,7 +479,7 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
 
   std::vector<unsigned int> finalInd(pq.size());
   for (size_t i=finalInd.size(); i-- > 0; ) {
-    finalInd[i] = m_toPublic[pq.top().index];
+    finalInd[i] = pq.top().index;
     pq.pop();
   }
 
@@ -525,10 +531,13 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
           const double dy = m_Y[part_idx]-Y;
           const double dz = m_Z[part_idx]-Z;
           const double dist_sq = dx*dx+dy*dy+dz*dz;
-          if (pq.size() < N) pq.push({dist_sq, part_idx});
-          else if (dist_sq < pq.top().dist_sq) {
-            pq.pop();
-            pq.push({dist_sq, part_idx});
+          if (pq.size() < N) pq.push({dist_sq, m_toPublic[part_idx]});
+          else if (dist_sq <= pq.top().dist_sq) {
+            const PartNode node = {dist_sq, m_toPublic[part_idx]};
+            if (node < pq.top()) {
+              pq.pop();
+              pq.push(node);
+            }
           }
         }
       }
@@ -538,7 +547,7 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
 
   std::vector<unsigned int> finalInd(pq.size());
   for (size_t i=finalInd.size(); i-- > 0; ) {
-    finalInd[i] = m_toPublic[pq.top().index];
+    finalInd[i] = pq.top().index;
     pq.pop();
   }
 

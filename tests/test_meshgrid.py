@@ -42,6 +42,18 @@ def brute_ranked(x, y, z, X, Y, Z, alive, skip=None):
     return np.sort(d[mask])
 
 
+def brute_order(x, y, z, X, Y, Z, alive, skip=None):
+    """Live indices ordered by (squared distance, index). The squared distance
+    is computed as the library computes it, so equal distances are equal
+    here too, and sorting on it rather than on its root keeps ties exact."""
+    d2 = (X - x) ** 2 + (Y - y) ** 2 + (Z - z) ** 2
+    mask = alive.copy()
+    if skip is not None:
+        mask[skip] = False
+    index = np.flatnonzero(mask)
+    return index[np.lexsort((index, d2[index]))]
+
+
 def brute_shell(x, y, z, X, Y, Z, alive, rmax, rmin, skip=None):
     d = distances(x, y, z, X, Y, Z)
     mask = alive & (d <= rmax) & (d >= rmin)
@@ -355,6 +367,7 @@ def test_nearest_objects_matches_brute_force(grids, points, regime):
             d = distances(x, y, z, X, Y, Z)[got]
             assert np.all(np.diff(d) >= -1e-12)          # nearest first
             assert d == pytest.approx(brute_ranked(x, y, z, X, Y, Z, alive)[:n])
+            assert got.tolist() == brute_order(x, y, z, X, Y, Z, alive)[:n].tolist()
 
 
 @pytest.mark.parametrize("regime", [name for name, _ in REGIMES])
@@ -504,8 +517,69 @@ def test_coincident_points():
     assert set(grid.close_objects(2.0, 2.0, 2.0, 0.0).tolist()) == {0, 1, 2}
     assert set(grid.close_objects(0, 0.0).tolist()) == {1, 2}
     assert grid.nearest_object(0) in (1, 2)
-    assert set(grid.nearest_objects(2, 0).tolist()) == {1, 2}
+    assert grid.nearest_objects(2, 0).tolist() == [1, 2]
     assert grid.nearest_objects(3, 0).tolist()[2] == 3
+
+
+# "nearest first; ties by ascending index", on integer lattices, where every
+# squared distance is a small exact integer and most of them tie
+
+
+def test_nearest_objects_tie_order_by_hand():
+    # object a*9 + b*3 + c at (a, b, c). From the centre, object 13: six objects
+    # at d^2 = 1 (4, 10, 12, 14, 16, 22) and twelve at d^2 = 2, the lowest of
+    # them 1 and 3; asking for 6 + 2 cuts that shell, so the last two places go
+    # to 1 and 3. From (0.5, 0.5, 0.5) the eight corners of the unit cube all
+    # tie. Cellsize 1.5 puts several objects in a cell, so the grid's internal
+    # order is not the index order.
+    a, b, c = np.meshgrid(np.arange(3.0), np.arange(3.0), np.arange(3.0), indexing="ij")
+    grid = meshsearch.MeshGrid(a.ravel(), b.ravel(), c.ravel(), 1.5, [[0.0, 3.0]] * 3)
+
+    assert grid.nearest_objects(8, 13).tolist() == [4, 10, 12, 14, 16, 22, 1, 3]
+    assert grid.nearest_objects(9, 1.0, 1.0, 1.0).tolist() == [13, 4, 10, 12, 14, 16, 22, 1, 3]
+    assert grid.nearest_objects(3, 0.5, 0.5, 0.5).tolist() == [0, 1, 3]
+    assert grid.nearest_objects(8, 0.5, 0.5, 0.5).tolist() == [0, 1, 3, 4, 9, 10, 12, 13]
+    batched = grid.nearest_objects(3, np.array([0.5, 1.0]), np.array([0.5, 1.0]),
+                                   np.array([0.5, 1.0]))
+    assert batched.tolist() == [[0, 1, 3], [13, 4, 10]]
+
+
+@pytest.mark.parametrize("cellsize", [0.7, 1.0, 2.5, 4.0])
+def test_nearest_objects_tie_order_on_a_shuffled_lattice(cellsize):
+    # a 10^3 lattice whose indices are a random permutation of the sites, so
+    # index order has nothing to do with position or cell order; then some
+    # removals, and additions coincident with existing sites, whose higher
+    # indices must come after the objects they tie with. The counts end inside
+    # shells, so the N-th place is a tie, and include otswap's 113.
+    side = 10
+    rng = np.random.default_rng(8)
+    site = rng.permutation(side ** 3)
+    X = (site // (side * side)).astype(float)
+    Y = (site // side % side).astype(float)
+    Z = (site % side).astype(float)
+    grid = meshsearch.MeshGrid(X, Y, Z, cellsize, [[0.0, float(side)]] * 3)
+    alive = np.ones(len(X), dtype=bool)
+
+    for index in rng.choice(len(X), 30, replace=False):
+        grid.remove_object(int(index))
+        alive[index] = False
+    for source in rng.integers(0, side ** 3, 30):
+        assert grid.add_object(X[source], Y[source], Z[source]) == len(X)
+        X, Y, Z = np.append(X, X[source]), np.append(Y, Y[source]), np.append(Z, Z[source])
+        alive = np.append(alive, True)
+
+    live = np.flatnonzero(alive)
+    queries = 0.5 * rng.integers(0, 2 * side + 1, (25, 3))
+    for (x, y, z), index in zip(queries, rng.choice(live, 25)):
+        index = int(index)
+        for n in (1, 2, 5, 7, 13, 20, 27, 60, 113):
+            assert grid.nearest_objects(n, x, y, z).tolist() == \
+                brute_order(x, y, z, X, Y, Z, alive)[:n].tolist()
+            assert grid.nearest_objects(n, index).tolist() == \
+                brute_order(X[index], Y[index], Z[index], X, Y, Z, alive, skip=index)[:n].tolist()
+
+    expected = [brute_order(x, y, z, X, Y, Z, alive)[:27] for x, y, z in queries]
+    assert grid.nearest_objects(27, *queries.T.copy()).tolist() == np.array(expected).tolist()
 
 
 @pytest.mark.parametrize("cellsize", [0.3, 0.12, 0.05])

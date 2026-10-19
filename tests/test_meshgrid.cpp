@@ -142,8 +142,12 @@ namespace {
 
 
   // nearestObjects must return exactly N live objects, nearest first, without
-  // repeats and without the query object. Compared distance by distance
-  // against the brute-force ranking, for the tie reason above.
+  // repeats and without the query object. Unlike nearestObject, the header
+  // fixes the order of ties (ascending index, also for the last place kept),
+  // so the result must equal the first N of the brute-force ranking by
+  // (distance, index) index for index. The reference computes distances as
+  // the library does, with the same contraction setting, so equal distances
+  // are equal in both.
   void checkNearestN (const MeshGrid& grid, const Cloud& cloud, const unsigned int N,
                       const double x, const double y, const double z, const long skip)
   {
@@ -164,6 +168,7 @@ namespace {
       assert(d >= previous-tol);
       previous = d;
       assert(std::fabs(d-ref[i].first) < tol);
+      assert(got[i] == ref[i].second);
     }
   }
 
@@ -1075,7 +1080,7 @@ namespace {
     assert(sorted(dup.closeObjects(0u, 0., 0.)) == std::vector<unsigned int>({1, 2}));
     assert(dup.nearestObject(0u) == 1 || dup.nearestObject(0u) == 2);
     assert(dup.nearestObjects(2, 0u).size() == 2);
-    assert(sorted(dup.nearestObjects(2, 0u)) == std::vector<unsigned int>({1, 2}));
+    assert(dup.nearestObjects(2, 0u) == std::vector<unsigned int>({1, 2}));
     assert(dup.nearestObjects(3, 0u)[2] == 3);
 
     printf("  Rmin boundary and coincident points: ok\n");
@@ -1135,6 +1140,94 @@ namespace {
     }
   }
 
+
+  // "Nearest first; ties by ascending index", on inputs where most distances
+  // tie exactly: integer lattices, where every squared distance is a small
+  // exact integer.
+  void testTieOrder ()
+  {
+    // A 3x3x3 lattice at integer coordinates, object a*9+b*3+c at (a, b, c),
+    // worked by hand. From the centre (1, 1, 1), object 13: six objects at
+    // d^2 = 1 (4, 10, 12, 14, 16, 22), twelve at d^2 = 2 (1, 3, 5, 7, 9, 11,
+    // 15, 17, 19, 21, 23, 25). Asking for 6 + 2 cuts the d^2 = 2 shell, so the
+    // last two places must go to its two lowest indices, 1 and 3. From
+    // (0.5, 0.5, 0.5) the eight corners of the unit cube all tie, and the
+    // three lowest of them are kept. Cellsize 1.5 puts several objects in a
+    // cell, so the grid's internal order is not the index order.
+    std::vector<double> X, Y, Z;
+    for (int a=0; a<3; ++a) for (int b=0; b<3; ++b) for (int c=0; c<3; ++c) {
+      X.push_back(a); Y.push_back(b); Z.push_back(c);
+    }
+    const std::vector<std::vector<double>> small = {{0., 3.}, {0., 3.}, {0., 3.}};
+    const MeshGrid grid(X, Y, Z, 1.5, small);
+
+    assert(grid.nearestObjects(8, 13u) == std::vector<unsigned int>({4, 10, 12, 14, 16, 22, 1, 3}));
+    assert(grid.nearestObjects(9, 1., 1., 1.) == std::vector<unsigned int>({13, 4, 10, 12, 14, 16, 22, 1, 3}));
+    assert(grid.nearestObjects(3, 0.5, 0.5, 0.5) == std::vector<unsigned int>({0, 1, 3}));
+    assert(grid.nearestObjects(8, 0.5, 0.5, 0.5) == std::vector<unsigned int>({0, 1, 3, 4, 9, 10, 12, 13}));
+
+    // A 12^3 lattice whose indices are a random permutation of the sites, so
+    // that index order has nothing to do with position or with the grid's
+    // cell order; then a few removals, and additions coincident with existing
+    // sites, whose new indices are higher than every original one and must
+    // therefore come after the objects they tie with. N runs through values
+    // that end inside a shell (a tie at the N-th place) and the 113 otswap
+    // uses; cellsizes from below the spacing to several spacings.
+    const int side = 12;
+    const size_t n = size_t(side)*side*side;
+    std::mt19937 gen(8u);
+    std::vector<size_t> site(n);
+    for (size_t i=0; i<n; ++i) site[i] = i;
+    std::shuffle(site.begin(), site.end(), gen);
+
+    const std::vector<std::vector<double>> box = {{0., double(side)}, {0., double(side)}, {0., double(side)}};
+    const double cellsizes[] = {0.7, 1., 2.5, 4.};
+    const unsigned int counts[] = {1, 2, 5, 7, 13, 20, 27, 60, 113};
+
+    for (const double cellsize : cellsizes) {
+      Cloud cloud;
+      for (size_t i=0; i<n; ++i) {
+        cloud.X.push_back(double(site[i]/(side*side)));
+        cloud.Y.push_back(double(site[i]/side%side));
+        cloud.Z.push_back(double(site[i]%side));
+      }
+      cloud.alive.assign(n, 1);
+      MeshGrid lattice(cloud.X, cloud.Y, cloud.Z, cellsize, box);
+
+      std::uniform_int_distribution<unsigned int> pick(0, (unsigned int)n-1);
+      for (int r=0; r<40; ++r) {
+        const unsigned int index = pick(gen);
+        if (!cloud.alive[index]) continue;
+        lattice.removeObject(index);
+        cloud.alive[index] = 0;
+      }
+      for (int r=0; r<40; ++r) {
+        const unsigned int source = pick(gen);
+        const unsigned int added = lattice.addObject(cloud.X[source], cloud.Y[source], cloud.Z[source]);
+        assert(added == cloud.size());
+        cloud.X.push_back(cloud.X[source]);
+        cloud.Y.push_back(cloud.Y[source]);
+        cloud.Z.push_back(cloud.Z[source]);
+        cloud.alive.push_back(1);
+      }
+
+      std::uniform_int_distribution<int> coord(0, 2*side);
+      std::uniform_int_distribution<unsigned int> anyIndex(0, (unsigned int)cloud.size()-1);
+      for (int q=0; q<30; ++q) {
+        // half-integer coordinates: lattice sites, cell centres, edge and
+        // face midpoints, each with its own pattern of ties
+        const double x = 0.5*coord(gen), y = 0.5*coord(gen), z = 0.5*coord(gen);
+        unsigned int index = anyIndex(gen);
+        while (!cloud.alive[index]) index = anyIndex(gen);
+        for (const unsigned int N : counts) {
+          checkNearestN(lattice, cloud, N, x, y, z, -1);
+          checkNearestN(lattice, cloud, N, cloud.X[index], cloud.Y[index], cloud.Z[index], (long)index);
+        }
+      }
+      printf("  tie order on a lattice (cellsize %.1f): ok\n", cellsize);
+    }
+  }
+
 }
 
 
@@ -1148,6 +1241,7 @@ int main ()
   testIndexStability();
   testRminBoundary();
   testDuplicates();
+  testTieOrder();
   testDegenerateExtents();
   testConstructorValidation();
   testZeroExtent();
