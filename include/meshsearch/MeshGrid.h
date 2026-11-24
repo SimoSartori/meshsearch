@@ -241,8 +241,9 @@ namespace meshsearch {
      *  @brief Remove an object from the grid.
      *  @throw IndexError if @p index is out of range or already removed
      *
-     *  Its coordinates are retained but unreachable, and its index stays
-     *  invalid for the lifetime of the grid.
+     *  Its coordinates are no longer kept, and its index stays invalid for
+     *  the lifetime of the grid. The memory is not returned: the grid does
+     *  not shrink.
      */
     void removeObject (unsigned int index);
 
@@ -252,21 +253,31 @@ namespace meshsearch {
      *  @throw Error if the point is outside the box, or if 4294967295 indices
      *    have already been issued
      *
-     *  The box is not refitted. Indices of removed objects are not reused, so
-     *  their storage is not reclaimed.
+     *  The box is not refitted. Indices of removed objects are not reused, and
+     *  the memory of a grid that has grown is not reclaimed. To add many
+     *  objects, build a new grid: it is faster and uses less memory.
      */
     unsigned int addObject (double X, double Y, double Z);
 
   protected:
 
-    /// Coordinates in cell order, so that a cell's objects are contiguous;
-    /// indexed by internal index, not by object index. Entries of removed
-    /// objects persist.
+    /// Slots of one cell: its objects fill @c count slots from @c start, in
+    /// insertion order, and spare slots follow up to @c cap.
+    struct CellBlock {
+      size_t start;        ///< first slot
+      unsigned int count;  ///< objects in the cell
+      unsigned int cap;    ///< slots reserved for the cell
+    };
+
+    /// Coordinates by slot, so that a cell's objects are contiguous. Spare
+    /// slots, and slots a block has moved out of, hold no object.
     std::vector<double> m_X, m_Y, m_Z;
 
-    /// Object index to internal index, and internal index back to object
-    /// index. Only the object index is ever public.
-    std::vector<unsigned int> m_toInternal, m_toPublic;
+    /// Object index of the object in each slot.
+    std::vector<unsigned int> m_toPublic;
+
+    /// Slot of each object, by object index; stale once it is removed.
+    std::vector<size_t> m_toInternal;
 
     /// Per object, whether it is still in the grid; indexed by object index.
     std::vector<char> m_alive;
@@ -287,9 +298,9 @@ namespace meshsearch {
     /// only on m_nCells, so copies of the grid share it.
     std::shared_ptr<const std::vector<std::vector<GridOffset>>> m_mask;
 
-    /// Live internal indices per cell, addressed by getLinearIndex. A cell's
-    /// entries are a contiguous ascending range until objects are added.
-    std::vector<std::vector<unsigned int>> m_grid;
+    /// Slot block of each cell, addressed by getLinearIndex. A full cell's
+    /// block moves to the end with at least twice the room.
+    std::vector<CellBlock> m_cells;
 
     /// Cell coordinates to linear cell index.
     size_t getLinearIndex (unsigned int ix, unsigned int iy, unsigned int iz) const;
