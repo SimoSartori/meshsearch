@@ -2,6 +2,8 @@
 #define MESHSEARCH_MESHGRID_H
 
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -74,6 +76,15 @@ namespace meshsearch {
       std::optional<std::array<std::array<double,2>,3>> limits;
       /// Per axis, whether distances wrap around the box. All false by default.
       std::array<bool,3> periodic{};
+    };
+
+    /// Results of a batch of closeObjects queries, in query order.
+    struct Batch {
+      /// The indices found by every query, concatenated.
+      std::vector<unsigned int> indices;
+      /// One more entry than queries, starting at 0: query i found
+      /// indices[offsets[i]] up to, excluding, indices[offsets[i+1]].
+      std::vector<std::uint64_t> offsets;
     };
 
     /**
@@ -184,6 +195,37 @@ namespace meshsearch {
     unsigned int nearestObject (unsigned int index) const;
 
     /**
+     *  @brief nearestObject for each point (X[i], Y[i], Z[i]), in order.
+     *  @throw Error if the vectors differ in length, if a point is outside
+     *    the box, or if the grid holds no objects, even for no point
+     *
+     *  On a throw, the queries already answered are lost. This holds for
+     *  every batch member.
+     */
+    std::vector<unsigned int> nearestObject (const std::vector<double>& X,
+                                             const std::vector<double>& Y,
+                                             const std::vector<double>& Z) const;
+
+    /// As above, into @p out, the last argument, which is cleared first and
+    /// keeps its capacity; its content is unspecified if the call throws.
+    /// This holds for every member taking @p out.
+    void nearestObject (const std::vector<double>& X,
+                        const std::vector<double>& Y,
+                        const std::vector<double>& Z,
+                        std::vector<unsigned int>& out) const;
+
+    /**
+     *  @brief nearestObject for each object of @p indices, in order.
+     *  @throw IndexError if an index is out of range or removed
+     *  @throw Error if fewer than two objects remain, even for no index
+     */
+    std::vector<unsigned int> nearestObject (const std::vector<unsigned int>& indices) const;
+
+    /// As above, into @p out, which may be @p indices itself.
+    void nearestObject (const std::vector<unsigned int>& indices,
+                        std::vector<unsigned int>& out) const;
+
+    /**
      *  @brief The @p N objects nearest to a point, nearest first; ties by
      *    ascending index.
      *  @param N at most get_nObjects(); 0 returns an empty vector
@@ -212,6 +254,48 @@ namespace meshsearch {
      */
     std::vector<unsigned int> nearestObjects (unsigned int N,
                                               unsigned int index) const;
+
+    /// The point overload of nearestObjects, into @p out, which is cleared
+    /// first.
+    void nearestObjects (unsigned int N, double X, double Y, double Z,
+                         std::vector<unsigned int>& out) const;
+
+    /// The index overload of nearestObjects, into @p out, which is cleared
+    /// first.
+    void nearestObjects (unsigned int N, unsigned int index,
+                         std::vector<unsigned int>& out) const;
+
+    /**
+     *  @brief nearestObjects for each point (X[i], Y[i], Z[i]).
+     *  @return n*N indices, query i's N at [i*N, (i+1)*N), each in the order
+     *    of the single query
+     *  @throw Error if the vectors differ in length, if a point is outside
+     *    the box, or if N exceeds get_nObjects(), even for no point
+     */
+    std::vector<unsigned int> nearestObjects (unsigned int N,
+                                              const std::vector<double>& X,
+                                              const std::vector<double>& Y,
+                                              const std::vector<double>& Z) const;
+
+    /// As above, into @p out.
+    void nearestObjects (unsigned int N,
+                         const std::vector<double>& X,
+                         const std::vector<double>& Y,
+                         const std::vector<double>& Z,
+                         std::vector<unsigned int>& out) const;
+
+    /**
+     *  @brief nearestObjects for each object of @p indices.
+     *  @return n*N indices, query i's N at [i*N, (i+1)*N)
+     *  @throw IndexError if an index is out of range or removed
+     *  @throw Error if N is not below get_nObjects(), even for no index
+     */
+    std::vector<unsigned int> nearestObjects (unsigned int N,
+                                              const std::vector<unsigned int>& indices) const;
+
+    /// As above, into @p out, which may be @p indices itself.
+    void nearestObjects (unsigned int N, const std::vector<unsigned int>& indices,
+                         std::vector<unsigned int>& out) const;
 
     /**
      *  @brief Objects at distance d from a point, with Rmin <= d <= Rmax.
@@ -256,6 +340,104 @@ namespace meshsearch {
      */
     std::vector<unsigned int> closeObjects (unsigned int index,
                                             double Rmax, double Rmin = 0.) const;
+
+    /// The point overload of closeObjects, into @p out, which is cleared
+    /// first; with Rmin, then with Rmin = 0.
+    void closeObjects (double X, double Y, double Z, double Rmax, double Rmin,
+                       std::vector<unsigned int>& out) const;
+    void closeObjects (double X, double Y, double Z, double Rmax,
+                       std::vector<unsigned int>& out) const;
+
+    /// The index overload of closeObjects, into @p out, which is cleared
+    /// first; with Rmin, then with Rmin = 0.
+    void closeObjects (unsigned int index, double Rmax, double Rmin,
+                       std::vector<unsigned int>& out) const;
+    void closeObjects (unsigned int index, double Rmax,
+                       std::vector<unsigned int>& out) const;
+
+    /**
+     *  @brief closeObjects for each point (X[i], Y[i], Z[i]), with the same
+     *    radii.
+     *  @return each query's indices, in the order the single query returns
+     *    them
+     *  @throw Error if the vectors differ in length, if a point is outside
+     *    the box, or on the radii as closeObjects, even for no point
+     */
+    Batch closeObjects (const std::vector<double>& X,
+                        const std::vector<double>& Y,
+                        const std::vector<double>& Z,
+                        double Rmax, double Rmin = 0.) const;
+
+    /// As above, into @p out; with Rmin, then with Rmin = 0.
+    void closeObjects (const std::vector<double>& X,
+                       const std::vector<double>& Y,
+                       const std::vector<double>& Z,
+                       double Rmax, double Rmin, Batch& out) const;
+    void closeObjects (const std::vector<double>& X,
+                       const std::vector<double>& Y,
+                       const std::vector<double>& Z,
+                       double Rmax, Batch& out) const;
+
+    /**
+     *  @brief closeObjects for each object of @p indices, with the same
+     *    radii; each query excludes its own object.
+     *  @throw IndexError if an index is out of range or removed
+     *  @throw Error on the radii as closeObjects, even for no index
+     */
+    Batch closeObjects (const std::vector<unsigned int>& indices,
+                        double Rmax, double Rmin = 0.) const;
+
+    /// As above, into @p out; with Rmin, then with Rmin = 0.
+    void closeObjects (const std::vector<unsigned int>& indices,
+                       double Rmax, double Rmin, Batch& out) const;
+    void closeObjects (const std::vector<unsigned int>& indices,
+                       double Rmax, Batch& out) const;
+
+    /**
+     *  @brief Number of objects closeObjects would return for the point.
+     *  @throw Error as closeObjects
+     */
+    std::size_t countObjects (double X, double Y, double Z,
+                              double Rmax, double Rmin = 0.) const;
+
+    /**
+     *  @brief Number of objects closeObjects would return for object
+     *    @p index, which is excluded.
+     *  @throw IndexError if @p index is out of range or removed
+     *  @throw Error on the radii as closeObjects
+     */
+    std::size_t countObjects (unsigned int index,
+                              double Rmax, double Rmin = 0.) const;
+
+    /// countObjects for each point (X[i], Y[i], Z[i]), in order. Throws as
+    /// the closeObjects batch.
+    std::vector<std::uint64_t> countObjects (const std::vector<double>& X,
+                                             const std::vector<double>& Y,
+                                             const std::vector<double>& Z,
+                                             double Rmax, double Rmin = 0.) const;
+
+    /// As above, into @p out; with Rmin, then with Rmin = 0.
+    void countObjects (const std::vector<double>& X,
+                       const std::vector<double>& Y,
+                       const std::vector<double>& Z,
+                       double Rmax, double Rmin,
+                       std::vector<std::uint64_t>& out) const;
+    void countObjects (const std::vector<double>& X,
+                       const std::vector<double>& Y,
+                       const std::vector<double>& Z,
+                       double Rmax, std::vector<std::uint64_t>& out) const;
+
+    /// countObjects for each object of @p indices, in order. Throws as the
+    /// closeObjects batch.
+    std::vector<std::uint64_t> countObjects (const std::vector<unsigned int>& indices,
+                                             double Rmax, double Rmin = 0.) const;
+
+    /// As above, into @p out; with Rmin, then with Rmin = 0.
+    void countObjects (const std::vector<unsigned int>& indices,
+                       double Rmax, double Rmin,
+                       std::vector<std::uint64_t>& out) const;
+    void countObjects (const std::vector<unsigned int>& indices,
+                       double Rmax, std::vector<std::uint64_t>& out) const;
 
     /**
      *  @brief Linear index of the cell containing a point.
@@ -364,23 +546,46 @@ namespace meshsearch {
     size_t getLinearIndex (unsigned int ix, unsigned int iy, unsigned int iz) const;
 
     /// Visit every object of the cells that can hold one within the threshold
-    /// of the point, on a grid with a periodic axis, from shell @p Rmin on.
-    /// @p visit gets the first slot of the cell, the position in it and the
-    /// squared distance; @p threshold is read before each shell and cell.
+    /// of the point, from shell @p Rmin on. @p visit gets the first slot of
+    /// the cell, the position in it and the squared distance; @p threshold is
+    /// read before each shell and cell. walk dispatches to walkPlain or, on a
+    /// grid with a periodic axis, to walkPeriodic.
+    template <class Threshold, class Visit>
+    void walk (const std::array<unsigned int, 3>& target,
+               double X, double Y, double Z, double Rmin,
+               Threshold&& threshold, Visit&& visit) const;
+    template <class Threshold, class Visit>
+    void walkPlain (const std::array<unsigned int, 3>& target,
+                    double X, double Y, double Z, double Rmin,
+                    Threshold&& threshold, Visit&& visit) const;
     template <class Threshold, class Visit>
     void walkPeriodic (const std::array<unsigned int, 3>& target,
                        double X, double Y, double Z, double Rmin,
                        Threshold&& threshold, Visit&& visit) const;
 
-    /// The six queries on a grid with a periodic axis. @p index, when not
-    /// null, names the object the query starts from and replaces the point.
+    /// The single queries on a grid with a periodic axis. @p index, when
+    /// not null, names the object the query starts from and replaces the
+    /// point.
     unsigned int nearestObjectPeriodic (double X, double Y, double Z,
                                         const unsigned int* index) const;
-    std::vector<unsigned int> nearestObjectsPeriodic (unsigned int N, double X, double Y, double Z,
-                                                      const unsigned int* index) const;
-    std::vector<unsigned int> closeObjectsPeriodic (double X, double Y, double Z,
-                                                    double Rmax, double Rmin,
-                                                    const unsigned int* index) const;
+    void nearestObjectsPeriodic (std::vector<unsigned int>& out, unsigned int N,
+                                 double X, double Y, double Z,
+                                 const unsigned int* index) const;
+    void closeObjectsPeriodic (std::vector<unsigned int>& out,
+                               double X, double Y, double Z,
+                               double Rmax, double Rmin,
+                               const unsigned int* index) const;
+
+    /// Linear index of the cell holding object @p index; 0 if it is not
+    /// alive, which the query itself then reports.
+    size_t objectCell (unsigned int index) const;
+
+    /// The core of countObjects, on a validated query; with @p Exclude,
+    /// slot @p self is skipped.
+    template <bool Exclude, class Sink>
+    void closeScan (const std::array<unsigned int, 3>& target,
+                    double X, double Y, double Z, size_t self,
+                    double Rmax, double Rmin, Sink&& sink) const;
 
   };
 

@@ -51,7 +51,7 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
   list(APPEND MESHSEARCH_PRIVATE_OPTIONS -Wall -Wextra)
 endif()
 
-add_library(meshsearch STATIC src/MeshGrid.cpp)
+add_library(meshsearch STATIC src/MeshGrid.cpp src/MeshGridBatch.cpp)
 add_library(meshsearch::meshsearch ALIAS meshsearch)
 
 # The archive gets linked into the Python module, which is a shared object.
@@ -93,6 +93,14 @@ if (MESHSEARCH_BUILD_TESTS)
   target_compile_options(test_periodic PRIVATE ${MESHSEARCH_PRIVATE_OPTIONS})
 
   add_test(NAME periodic COMMAND test_periodic)
+
+  # The forms test queries one grid from several threads.
+  find_package(Threads REQUIRED)
+  add_executable(test_forms tests/test_forms.cpp)
+  target_link_libraries(test_forms PRIVATE meshsearch Threads::Threads)
+  target_compile_options(test_forms PRIVATE ${MESHSEARCH_PRIVATE_OPTIONS})
+
+  add_test(NAME forms COMMAND test_forms)
 
   if (MESHSEARCH_BUILD_EXAMPLES)
     add_test(NAME example_periodic COMMAND example_periodic)
