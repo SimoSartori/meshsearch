@@ -15,6 +15,16 @@ namespace {
 
   const unsigned int max_objects = std::numeric_limits<unsigned int>::max();
 
+  const double tiny_sq = 0x1p-1000;
+
+  const double huge_sq = 0x1p1000;
+
+  const double stop_factor = 1.-0x1p-14;
+
+  const double pad_scale = 0x1p-49;
+
+  const double pad_factor = 1.+0x1p-40;
+
   bool checkedProduct (const std::uint64_t a, const std::uint64_t b, std::uint64_t& out)
   {
     if (a != 0 && b > std::numeric_limits<std::uint64_t>::max()/a) return false;
@@ -49,9 +59,8 @@ namespace {
     std::array<unsigned int, 3> coords = {0, 0, 0};
     for (int i=0; i<3; ++i) {
       const double floored = std::floor(pos[i]);
-      unsigned int ind = (floored > 0.) ? static_cast<unsigned int>(floored) : 0;
-      if (ind >= nCells[i]) ind = nCells[i]-1;
-      coords[i] = ind;
+      if (floored >= double(nCells[i])) coords[i] = nCells[i]-1;
+      else if (floored > 0.) coords[i] = static_cast<unsigned int>(floored);
     }
 
     return coords;
@@ -69,6 +78,44 @@ namespace {
     if (Rmax < 0.) throw meshsearch::Error("Rmax < 0");
     if (Rmin < 0.) throw meshsearch::Error("Rmin < 0");
     if (Rmax < Rmin) throw meshsearch::Error("Rmax < Rmin");
+  }
+
+  bool exceeds (const double bound_sq, const double threshold)
+  {
+    return bound_sq >= tiny_sq && threshold <= huge_sq && bound_sq > threshold;
+  }
+
+  bool shellBeyond (const unsigned int shell, const double cellsize, const double threshold)
+  {
+    if (shell == 0) return false;
+    const double reach = shell*cellsize;
+    return exceeds((reach*reach)*stop_factor, threshold);
+  }
+
+  bool looseShellBeyond (const unsigned int shell, const double cellsize, const double threshold)
+  {
+    const double reach = (shell > 1) ? (shell-1.)*cellsize : 0.;
+    return exceeds(reach*reach, threshold);
+  }
+
+  unsigned int firstShell (const std::vector<std::vector<double>>& lims,
+                           const std::array<unsigned int, 3>& nCells,
+                           const double cellsize, const size_t nShells,
+                           const double Rmin, const double Rmin_sq)
+  {
+    if (!(Rmin_sq >= tiny_sq)) return 0;
+
+    double pad_sq = 0.;
+    for (int i=0; i<3; ++i) {
+      const double span = double(nCells[i])*cellsize;
+      const double pad = pad_scale*(std::fabs(lims[i][0])+std::fabs(lims[i][1])+2.*span+2.*cellsize)/cellsize;
+      pad_sq += pad*pad;
+    }
+    const double pad_cells = std::sqrt(pad_sq)*pad_factor;
+
+    const double start = std::floor(Rmin*(1./cellsize))-5.-std::ceil(pad_cells);
+    if (!(start > 0.)) return 0;
+    return (start < double(nShells)) ? static_cast<unsigned int>(start) : static_cast<unsigned int>(nShells);
   }
 
 }
@@ -101,6 +148,8 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
     throw Error("the coordinate vectors differ in length");
   if (!(std::isfinite(cellsize) && cellsize > 0.))
     throw Error("cellsize must be positive and finite");
+  if (!std::isfinite(1./cellsize))
+    throw Error("cellsize is too small: its reciprocal overflows a double");
   if (X.size() > max_objects)
     throw Error("too many objects: at most 4294967295 are supported");
 
@@ -159,14 +208,29 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
   double grownLo[3], grownHi[3];
   for (int i=0; i<3; ++i) {
     const double range = hi[i]-lo[i];
-    const double grid_span = nCells[i]*cellsize;
-    const double offset = (grid_span-range)/2.;
-
+    double grid_span = nCells[i]*cellsize;
+    double offset = (grid_span-range)/2.;
     grownLo[i] = lo[i]-offset;
     grownHi[i] = hi[i]+offset;
+
+    if (!(grownLo[i] <= lo[i] && grownHi[i] >= hi[i])) {
+      if (nCells[i] >= static_cast<unsigned int>(std::numeric_limits<int>::max()))
+        throw Error("the grid would need more than 2147483647 cells along "+std::string(axis_names[i]));
+      nCells[i]++;
+      grid_span = nCells[i]*cellsize;
+      offset = (grid_span-range)/2.;
+      grownLo[i] = lo[i]-offset;
+      grownHi[i] = hi[i]+offset;
+    }
+
     if (!std::isfinite(grownLo[i]) || !std::isfinite(grownHi[i]))
       throw Error("the box is too large to represent");
   }
+
+  const double extent[3] = {grownHi[0]-grownLo[0], grownHi[1]-grownLo[1], grownHi[2]-grownLo[2]};
+  const double diagonal_sq = extent[0]*extent[0]+extent[1]*extent[1]+extent[2]*extent[2];
+  if (!std::isfinite(diagonal_sq))
+    throw Error("the box is too large: its squared diagonal overflows a double");
 
   const std::uint64_t nx = nCells[0], ny = nCells[1], nz = nCells[2];
   const char* const too_many_cells = "the grid would need more cells than 64-bit sizes can count or address";
@@ -338,8 +402,7 @@ unsigned int meshsearch::MeshGrid::nearestObject (const double X, const double Y
   unsigned int maskInd = 0;
 
   while (maskInd < m_mask->size()) {
-    const double layer_dist = maskInd*m_cellsize;
-    if (layer_dist*layer_dist >= min_dist_sq) break;
+    if (shellBeyond(maskInd, m_cellsize, min_dist_sq)) break;
 
     for (const auto& offset : (*m_mask)[maskInd]) {
       const std::int64_t currX = std::int64_t(targetX)+offset.i;
@@ -351,7 +414,7 @@ unsigned int meshsearch::MeshGrid::nearestObject (const double X, const double Y
           const double dy = m_Y[part_idx]-Y;
           const double dz = m_Z[part_idx]-Z;
           const double dist_sq_temp = dx*dx+dy*dy+dz*dz;
-          if (dist_sq_temp < min_dist_sq) {
+          if (finalInd == std::numeric_limits<unsigned int>::max() || dist_sq_temp < min_dist_sq) {
             min_dist_sq = dist_sq_temp;
             finalInd = part_idx;
           }
@@ -395,8 +458,7 @@ unsigned int meshsearch::MeshGrid::nearestObject (const unsigned int index) cons
   unsigned int maskInd = 0;
 
   while (maskInd < m_mask->size()) {
-    const double layer_dist = maskInd*m_cellsize;
-    if (layer_dist*layer_dist >= min_dist_sq) break;
+    if (shellBeyond(maskInd, m_cellsize, min_dist_sq)) break;
 
     for (const auto& offset : (*m_mask)[maskInd]) {
       const std::int64_t currX = std::int64_t(targetX)+offset.i;
@@ -409,7 +471,7 @@ unsigned int meshsearch::MeshGrid::nearestObject (const unsigned int index) cons
           const double dy = m_Y[part_idx]-Y;
           const double dz = m_Z[part_idx]-Z;
           const double dist_sq_temp = dx*dx+dy*dy+dz*dz;
-          if (dist_sq_temp < min_dist_sq) {
+          if (finalInd == std::numeric_limits<unsigned int>::max() || dist_sq_temp < min_dist_sq) {
             min_dist_sq = dist_sq_temp;
             finalInd = part_idx;
           }
@@ -448,10 +510,7 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
   unsigned int maskInd = 0;
 
   while (maskInd < m_mask->size()) {
-    if (pq.size() == N) {
-      const double min_shell_dist = (maskInd > 1) ? (maskInd-1.)*m_cellsize : 0.;
-      if (min_shell_dist*min_shell_dist > pq.top().dist_sq) break;
-    }
+    if (pq.size() == N && looseShellBeyond(maskInd, m_cellsize, pq.top().dist_sq)) break;
 
     for (const auto& offset : (*m_mask)[maskInd]) {
       const std::int64_t currX = std::int64_t(targetX)+offset.i;
@@ -515,10 +574,7 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
   unsigned int maskInd = 0;
 
   while (maskInd < m_mask->size()) {
-    if (pq.size() == N) {
-      const double min_shell_dist = (maskInd > 1) ? (maskInd-1.)*m_cellsize : 0.;
-      if (min_shell_dist*min_shell_dist > pq.top().dist_sq) break;
-    }
+    if (pq.size() == N && looseShellBeyond(maskInd, m_cellsize, pq.top().dist_sq)) break;
 
     for (const auto& offset : (*m_mask)[maskInd]) {
       const std::int64_t currX = std::int64_t(targetX)+offset.i;
@@ -567,8 +623,6 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const double X, co
   const double Rmax_sq = Rmax*Rmax;
   const double Rmin_sq = Rmin*Rmin;
 
-  const double inv_cellsize = 1./m_cellsize;
-
   const int targetX = static_cast<int>(target[0]);
   const int targetY = static_cast<int>(target[1]);
   const int targetZ = static_cast<int>(target[2]);
@@ -577,19 +631,13 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const double X, co
   const int nCy = static_cast<int>(m_nCells[1]);
   const int nCz = static_cast<int>(m_nCells[2]);
 
-  const double mask_size = static_cast<double>(m_mask->size());
-
-  const double upper = std::floor(Rmax/m_cellsize)+1.;
-  const unsigned int max_mask_idx = static_cast<unsigned int>((upper < mask_size) ? upper : mask_size);
-
-  const double lower = std::floor(Rmin*inv_cellsize)-4.;
-  const unsigned int min_mask_idx = static_cast<unsigned int>((lower < 0.) ? 0. : ((lower < mask_size) ? lower : mask_size));
+  const unsigned int nShells = static_cast<unsigned int>(m_mask->size());
+  const unsigned int min_mask_idx = firstShell(m_lims, m_nCells, m_cellsize, nShells, Rmin, Rmin_sq);
 
   std::vector<unsigned int> finalInd;
 
-  for (unsigned int maskInd=min_mask_idx; maskInd<max_mask_idx; maskInd++) {
-    const double layer_dist = maskInd*m_cellsize;
-    if (layer_dist*layer_dist > Rmax_sq) break;
+  for (unsigned int maskInd=min_mask_idx; maskInd<nShells; maskInd++) {
+    if (shellBeyond(maskInd, m_cellsize, Rmax_sq)) break;
 
     for (const auto& offset : (*m_mask)[maskInd]) {
       const std::int64_t currX = std::int64_t(targetX)+offset.i;
@@ -630,8 +678,6 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const unsigned int
   const double Rmax_sq = Rmax*Rmax;
   const double Rmin_sq = Rmin*Rmin;
 
-  const double inv_cellsize = 1./m_cellsize;
-
   const auto target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
   const int targetX = static_cast<int>(target[0]);
   const int targetY = static_cast<int>(target[1]);
@@ -641,19 +687,13 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const unsigned int
   const int nCy = static_cast<int>(m_nCells[1]);
   const int nCz = static_cast<int>(m_nCells[2]);
 
-  const double mask_size = static_cast<double>(m_mask->size());
-
-  const double upper = std::floor(Rmax/m_cellsize)+1.;
-  const unsigned int max_mask_idx = static_cast<unsigned int>((upper < mask_size) ? upper : mask_size);
-
-  const double lower = std::floor(Rmin*inv_cellsize)-4.;
-  const unsigned int min_mask_idx = static_cast<unsigned int>((lower < 0.) ? 0. : ((lower < mask_size) ? lower : mask_size));
+  const unsigned int nShells = static_cast<unsigned int>(m_mask->size());
+  const unsigned int min_mask_idx = firstShell(m_lims, m_nCells, m_cellsize, nShells, Rmin, Rmin_sq);
 
   std::vector<unsigned int> finalInd;
 
-  for (unsigned int maskInd=min_mask_idx; maskInd<max_mask_idx; maskInd++) {
-    const double layer_dist = maskInd*m_cellsize;
-    if (layer_dist*layer_dist > Rmax_sq) break;
+  for (unsigned int maskInd=min_mask_idx; maskInd<nShells; maskInd++) {
+    if (shellBeyond(maskInd, m_cellsize, Rmax_sq)) break;
 
     for (const auto& offset : (*m_mask)[maskInd]) {
       const std::int64_t currX = std::int64_t(targetX)+offset.i;

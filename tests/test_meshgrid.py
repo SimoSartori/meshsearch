@@ -929,3 +929,106 @@ def test_a_long_axis_past_the_32_bit_threshold():
     ends = meshsearch.MeshGrid([0.25, length - 0.25], [0.5, 0.5], [0.5, 0.5], 1.0, limits)
     assert ends.nearest_object(0) == 1
     assert ends.nearest_object(1) == 0
+
+
+# --------------------------------------------------------------------------
+# rounding at cell faces, and the extremes the constructor accepts
+#
+# A point within a few ulp of a cell face can be assigned to the cell beyond
+# it. The header still promises exact shell membership and the true nearest
+# object; each case below is one where a rule with no allowance for this lost
+# a result. They mirror the C++ suite's cases exactly.
+
+FACE_BOX = [[0.0, 0.8], [0.0, 0.0], [0.0, 0.0]]
+FACE_Q = float(np.nextafter(0.4, 0.0))          # in cell 3, just below 0.4
+
+
+def test_an_object_at_exactly_rmax_beyond_a_rounded_face():
+    """0.7 lands in cell 7 although the double lies just below 7 * 0.1; from
+    the query, 0.7 - q is the double 0.3 exactly, so the object is at Rmax."""
+    assert 0.7 - FACE_Q == 0.3
+    grid = meshsearch.MeshGrid([0.7], [0.0], [0.0], 0.1, FACE_BOX)
+    assert grid.get_cell_coords(0.7, 0.0, 0.0)[0] == 7
+    assert grid.close_objects(FACE_Q, 0.0, 0.0, 0.3).tolist() == [0]
+    assert grid.close_objects(FACE_Q, 0.0, 0.0, 0.3, 0.3).tolist() == [0]
+
+    indices, offsets = grid.close_objects(np.array([FACE_Q]), np.zeros(1), np.zeros(1), 0.3)
+    assert indices.tolist() == [0] and offsets.tolist() == [0, 1]
+
+    pair = meshsearch.MeshGrid([FACE_Q, 0.7], [0.0, 0.0], [0.0, 0.0], 0.1, FACE_BOX)
+    assert pair.close_objects(0, 0.3).tolist() == [1]
+
+
+def test_the_nearest_object_beyond_a_rounded_face():
+    """A, just below 0.1, is in shell 2 from the query; B, at 0.7, is in
+    shell 3 and nearer. A stop with no margin returns A."""
+    a = float.fromhex("0x1.9999999999996p-4")
+    assert (0.7 - FACE_Q) ** 2 < (FACE_Q - a) ** 2
+    grid = meshsearch.MeshGrid([a, 0.7], [0.0, 0.0], [0.0, 0.0], 0.1, FACE_BOX)
+    assert grid.nearest_object(FACE_Q, 0.0, 0.0) == 1
+    assert grid.nearest_object(np.array([FACE_Q]), np.zeros(1), np.zeros(1)).tolist() == [1]
+    assert grid.nearest_objects(1, np.array([FACE_Q]), np.zeros(1), np.zeros(1)).tolist() == [[1]]
+
+    three = meshsearch.MeshGrid([a, 0.7, FACE_Q], [0.0] * 3, [0.0] * 3, 0.1, FACE_BOX)
+    assert three.nearest_object(2) == 1
+
+
+def test_an_object_at_exactly_rmin_in_an_overhanging_top_cell():
+    """A cellsize of about one ulp of coordinates near -9.8e7: the top cell
+    overhangs its nominal face by most of a cell, and a range starting at
+    floor(Rmin/cellsize) - 4 never reaches the object."""
+    h = float.fromhex
+    c = h("0x1.457ef4d38d4ebp-26")
+    limits = [[h("-0x1.74a7f8cac18dp+26"), h("-0x1.74a7f8cac18bep+26")],
+              [h("-0x1.74a7f8cac1876p+26"), h("-0x1.74a7f8cac1868p+26")],
+              [h("-0x1.74a7f8cac18cp+26"), h("-0x1.74a7f8cac18aep+26")]]
+    obj = [h("-0x1.74a7f8cac18cdp+26"), h("-0x1.74a7f8cac1874p+26"), h("-0x1.74a7f8cac18bep+26")]
+    q = [h("-0x1.74a7f8cac18bdp+26"), h("-0x1.74a7f8cac1867p+26"), h("-0x1.74a7f8cac18adp+26")]
+    rmin = h("0x1.ab884ef702284p-22")
+
+    grid = meshsearch.MeshGrid([obj[0]], [obj[1]], [obj[2]], c, limits)
+    assert grid.close_objects(*q, INF, rmin).tolist() == [0]
+    indices, _ = grid.close_objects(*(np.array([v]) for v in q), INF, rmin)
+    assert indices.tolist() == [0]
+
+
+def test_the_grown_box_contains_the_limits():
+    """(cells * cellsize - range) / 2 came out negative here, so the grown box
+    lay inside the limits and a point on a limit was refused."""
+    c, hi = 5.078493365404232, 3279294.892895552
+    grid = meshsearch.MeshGrid([0.0, hi], [0.5, 0.5], [0.5, 0.5], c,
+                               [[0.0, hi], [0.0, 1.0], [0.0, 1.0]])
+    assert grid.lims[0][0] <= 0.0 and grid.lims[0][1] >= hi
+    assert grid.nearest_object(0.0, 0.5, 0.5) == 0
+    assert grid.nearest_object(hi, 0.5, 0.5) == 1
+
+
+@pytest.mark.parametrize("build", [
+    lambda: meshsearch.MeshGrid([0.0, 9e159], [0.0, 0.0], [0.0, 0.0], 1e159),
+    lambda: meshsearch.MeshGrid([], [], [], 1e153, [[-1e154, 1e154], [0.0, 0.0], [0.0, 0.0]]),
+])
+def test_a_box_whose_squared_diagonal_overflows_raises(build):
+    raises_plain_error(build)
+
+
+def test_a_box_whose_squared_diagonal_is_representable_is_accepted():
+    grid = meshsearch.MeshGrid([0.0, 6e153], [0.0, 6e153], [0.0, 6e153], 1e153,
+                               [[0.0, 6e153]] * 3)
+    assert grid.nearest_object(0) == 1
+    assert grid.close_objects(0, INF).tolist() == [1]
+
+
+@pytest.mark.parametrize("cellsize", [1e-310, 5e-324])
+def test_a_cellsize_whose_reciprocal_overflows_raises(cellsize):
+    raises_plain_error(lambda: meshsearch.MeshGrid([0.0], [0.0], [0.0], cellsize))
+
+
+def test_a_batched_nearest_objects_with_too_large_n_raises_before_allocating():
+    """n_query * n would be far beyond any memory; the first query refuses n
+    before the result array is sized, so this is the single-point error, not
+    a MemoryError."""
+    grid = meshsearch.MeshGrid(*SMALL, 1.0, SMALL_BOX)
+    q = np.full(1_000_000, 1.0)
+    with pytest.raises(meshsearch.Error) as caught:
+        grid.nearest_objects(2**32 - 1, q, q, q)
+    assert "query 0" in str(caught.value)

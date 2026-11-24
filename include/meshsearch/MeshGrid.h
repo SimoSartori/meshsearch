@@ -74,15 +74,26 @@ namespace meshsearch {
      *    lo <= hi on each axis; if empty, the data range padded by a margin
      *    proportional to it
      *  @throw Error if the vectors differ in length; if cellsize is not finite
-     *    and positive; if limits is not 3x2, not finite, or has lo > hi on an
-     *    axis; if a coordinate is not finite or lies outside limits; if the
-     *    grid would need more than 2147483647 cells along an axis, or more
-     *    cells or memory than 64-bit sizes can count; or if there are more
-     *    than 4294967295 objects
+     *    and positive, or so small that 1/cellsize overflows a double; if
+     *    limits is not 3x2, not finite, or has lo > hi on an axis; if a
+     *    coordinate is not finite or lies outside limits; if the square of
+     *    the grown box's diagonal overflows a double; if the grid would need
+     *    more than 2147483647 cells along an axis, or more cells or memory
+     *    than 64-bit sizes can count; or if there are more than 4294967295
+     *    objects
      *
      *  Each side of the box is grown symmetrically to a whole number of cells.
-     *  get_lims returns the grown box, and members validate points against it,
-     *  so a point outside @p limits may still be accepted.
+     *  The grown box contains @p limits; where rounding would leave it inside
+     *  them, one more cell is added. get_lims returns the grown box, and
+     *  members validate points against it, so a point outside @p limits may
+     *  still be accepted.
+     *
+     *  Distances are compared through their squares, computed in double
+     *  precision as @c dx*dx+dy*dy+dz*dz. @c closeObjects returns every
+     *  object whose squared distance lies between @c Rmin*Rmin and
+     *  @c Rmax*Rmax, both included; the nearest-neighbour queries rank
+     *  objects by the same quantity, ties broken by index. The result
+     *  never depends on how objects fall into cells.
      *
      *  An axis of zero extent, where every coordinate is equal or lo == hi,
      *  gets one cell, and the box is grown symmetrically around it to one
@@ -206,6 +217,11 @@ namespace meshsearch {
     /**
      *  @brief Linear index of the cell containing a point.
      *  @throw Error if the point is outside the box
+     *
+     *  A point within rounding of a cell face may be assigned to the cell on
+     *  either side of it. Every member assigns a given point to the same
+     *  cell, so an object is always among the objects in the cell of its own
+     *  coordinates.
      */
     size_t get_Cell (double X, double Y, double Z) const;
 

@@ -645,6 +645,22 @@ namespace {
     ASSERT_OK(MeshGrid(X, Y, Z, 1., {{0., 4.}, {0., 4.}, {0., 4.}}));
     ASSERT_OK(MeshGrid({}, {}, {}, 1., {{2., 2.}, {0., 4.}, {0., 4.}}));
 
+    // A box whose squared diagonal overflows a double is refused, since a
+    // distance inside it could then overflow too. The first case is two
+    // objects 9e159 apart, which used to make nearestObject report that no
+    // object was found. A box of 6e153 per side, grown to at most 7e153,
+    // stays representable and is accepted.
+    ASSERT_THROWS_PLAIN(MeshGrid({0., 9.e159}, {0., 0.}, {0., 0.}, 1.e159));
+    ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, 1.e153, {{-1.e154, 1.e154}, {0., 0.}, {0., 0.}}));
+    ASSERT_OK(MeshGrid({}, {}, {}, 1.e153, {{0., 6.e153}, {0., 6.e153}, {0., 6.e153}}));
+
+    // A cellsize whose reciprocal overflows is refused. Only a box of zero
+    // extent can have so few cells that such a cellsize passes the count
+    // limits, so that is the case to check.
+    ASSERT_THROWS_PLAIN(MeshGrid({0.}, {0.}, {0.}, 1.e-310));
+    ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, std::numeric_limits<double>::denorm_min(), {{1., 1.}, {1., 1.}, {1., 1.}}));
+    ASSERT_OK(MeshGrid({0.}, {0.}, {0.}, 1.e-300));
+
     printf("  constructor input validation: ok\n");
   }
 
@@ -1228,6 +1244,302 @@ namespace {
     }
   }
 
+
+  // The stop and range rules near cell faces. A point within a few ulp of a
+  // face can be assigned to the cell on the far side of it, so a cell's
+  // contents may reach slightly closer to the query than the cell's nominal
+  // faces suggest. The header promises exact membership and the true nearest
+  // object regardless, so each case below is a configuration where a rule
+  // with no allowance for this loses a result. Each was found by search and
+  // is checked here exactly as found.
+  void testCellFaceRounding ()
+  {
+    const double inf = std::numeric_limits<double>::infinity();
+
+    // Cellsize 0.1 on [0, 0.8]. 0.7*10 rounds to exactly 7, so the object at
+    // 0.7 sits in cell 7 although the double 0.7 lies just below 7*0.1. The
+    // query just below 0.4 is in cell 3: offset 4, gap 3, shell 3. The
+    // difference 0.7 - q is the double 0.3 exactly, so the object is at
+    // exactly Rmax = 0.3, where floor(Rmax/cellsize) = 2 would stop the walk
+    // one shell short.
+    {
+      const std::vector<std::vector<double>> lims = {{0., 0.8}, {0., 0.}, {0., 0.}};
+      const double q = std::nextafter(0.4, 0.);
+      assert(0.7-q == 0.3);
+
+      const MeshGrid grid({0.7}, {0.}, {0.}, 0.1, lims);
+      assert(grid.get_CellCoords(0.7, 0., 0.)[0] == 7);
+      assert(grid.get_CellCoords(q, 0., 0.)[0] == 3);
+      assert(grid.closeObjects(q, 0., 0., 0.3) == std::vector<unsigned int>({0}));
+      assert(grid.closeObjects(q, 0., 0., 0.3, 0.3) == std::vector<unsigned int>({0}));
+
+      const MeshGrid pair({q, 0.7}, {0., 0.}, {0., 0.}, 0.1, lims);
+      assert(pair.closeObjects(0u, 0.3) == std::vector<unsigned int>({1}));
+      assert(pair.closeObjects(1u, 0.3) == std::vector<unsigned int>({0}));
+
+      // Object A, at 0x1.9999999999996p-4 just below 0.1 in cell 0, is in
+      // shell 2 from the same query; B, at 0.7, is in shell 3 and is nearer
+      // both exactly and in the computed squared distance. A stop with no
+      // margin, (3*cellsize)^2 >= the best so far, ends the walk before
+      // shell 3 and returns A.
+      const double a = 0x1.9999999999996p-4;
+      const double qa = q-a, bq = 0.7-q;
+      assert(bq*bq < qa*qa);
+
+      const MeshGrid two({a, 0.7}, {0., 0.}, {0., 0.}, 0.1, lims);
+      assert(two.nearestObject(q, 0., 0.) == 1);
+      assert(two.nearestObjects(1, q, 0., 0.) == std::vector<unsigned int>({1}));
+
+      const MeshGrid three({a, 0.7, q}, {0., 0., 0.}, {0., 0., 0.}, 0.1, lims);
+      assert(three.nearestObject(2u) == 1);
+      assert(three.nearestObjects(1, 2u) == std::vector<unsigned int>({1}));
+    }
+
+    // The lower end of a shell, with a cellsize of about one ulp of the
+    // coordinates, which are near -9.8e7. The top cell of such a grid can
+    // overhang its nominal face by most of a cell, so an object can lie
+    // further from the query than the shell index suggests. Here a single
+    // object lies at exactly Rmin from a query on the box's upper corner,
+    // and a range starting at floor(Rmin/cellsize) - 4 never reaches it.
+    {
+      const double c = 0x1.457ef4d38d4ebp-26;
+      const std::vector<std::vector<double>> lims =
+        {{-0x1.74a7f8cac18dp+26, -0x1.74a7f8cac18bep+26},
+         {-0x1.74a7f8cac1876p+26, -0x1.74a7f8cac1868p+26},
+         {-0x1.74a7f8cac18cp+26, -0x1.74a7f8cac18aep+26}};
+      const double ox = -0x1.74a7f8cac18cdp+26, oy = -0x1.74a7f8cac1874p+26, oz = -0x1.74a7f8cac18bep+26;
+      const double qx = -0x1.74a7f8cac18bdp+26, qy = -0x1.74a7f8cac1867p+26, qz = -0x1.74a7f8cac18adp+26;
+      const double Rmin = 0x1.ab884ef702284p-22;
+      const double dx = ox-qx, dy = oy-qy, dz = oz-qz;
+      assert(dx*dx+dy*dy+dz*dz >= Rmin*Rmin);
+
+      const MeshGrid grid({ox}, {oy}, {oz}, c, lims);
+      assert(grid.closeObjects(qx, qy, qz, inf, Rmin) == std::vector<unsigned int>({0}));
+
+      MeshGrid added = grid;
+      const unsigned int query = added.addObject(qx, qy, qz);
+      assert(added.closeObjects(query, inf, Rmin) == std::vector<unsigned int>({0}));
+    }
+
+    printf("  rounding at cell faces, found by search: ok\n");
+  }
+
+
+  // Every query kind against brute force on points placed within a few ulp of
+  // cell faces, where rounding decides which cell a point falls in, with radii
+  // chosen so that an object lies exactly on Rmax or Rmin. Two regimes: an
+  // ordinary cellsize, and one of about an ulp of the coordinates, where the
+  // top cell can overhang its nominal face by most of a cell. Objects are
+  // also added and removed, so the cells that addObject and removeObject
+  // compute are exercised against the same rounding.
+  void testFaceHugging ()
+  {
+    std::mt19937_64 gen(2611u);
+    auto uniform = [&](const double a, const double b) { return std::uniform_real_distribution<double>(a, b)(gen); };
+    auto integer = [&](const int a, const int b) { return std::uniform_int_distribution<int>(a, b)(gen); };
+    auto ulp = [](const double x) { return std::nextafter(std::fabs(x), std::numeric_limits<double>::infinity())-std::fabs(x); };
+    auto nudge = [](double x, const int steps) {
+      for (int k=0; k<std::abs(steps); ++k)
+        x = std::nextafter(x, steps > 0 ? std::numeric_limits<double>::infinity() : -std::numeric_limits<double>::infinity());
+      return x;
+    };
+
+    // The smallest radius whose square, as computed, is >= d2, and the largest
+    // whose square is <= d2: an object at computed squared distance d2 is then
+    // exactly on Rmax, or exactly on Rmin.
+    auto radiusAbove = [](const double d2) {
+      double R = std::sqrt(d2);
+      while (R*R < d2) R = std::nextafter(R, std::numeric_limits<double>::infinity());
+      for (double P = std::nextafter(R, 0.); P != R && P*P >= d2; P = std::nextafter(R, 0.)) R = P;
+      return R;
+    };
+    auto radiusBelow = [](const double d2) {
+      if (d2 == 0.) return 0.;
+      double R = std::sqrt(d2);
+      while (R*R > d2) R = std::nextafter(R, 0.);
+      for (double P = std::nextafter(R, std::numeric_limits<double>::infinity()); P*P <= d2;
+           P = std::nextafter(R, std::numeric_limits<double>::infinity())) R = P;
+      return R;
+    };
+
+    int grids = 0;
+    for (int trial=0; trial<600; ++trial) {
+      const bool ulpScale = (trial%2 == 1);
+      double c;
+      std::vector<std::vector<double>> lims(3);
+      if (!ulpScale) {
+        c = uniform(0.01, 10.);
+        for (int a=0; a<3; ++a) {
+          const double lo = uniform(-100., 100.);
+          lims[a] = {lo, lo+c*integer(1, 8)+(integer(0, 1) ? 0. : uniform(0., c))};
+        }
+      }
+      else {
+        const double base = std::ldexp(uniform(1., 2.), integer(20, 40))*(integer(0, 1) ? 1. : -1.);
+        const double u = ulp(base);
+        c = u*uniform(0.6, 1.6);
+        for (int a=0; a<3; ++a) {
+          const double lo = base+u*integer(-50, 50);
+          lims[a] = {lo, lo+u*integer(8, 20)};
+        }
+      }
+
+      const MeshGrid probe({}, {}, {}, c, lims);
+      const auto box = probe.get_lims();
+      auto pick = [&](const int a) {
+        double x;
+        if (!ulpScale) x = nudge(box[a][0]+integer(0, int(probe.get_nCells()[a]))*c, integer(-3, 3));
+        else x = lims[a][0]+ulp(lims[a][0])*integer(0, 4);
+        if (integer(0, 5) == 0) x = integer(0, 1) ? lims[a][0] : lims[a][1];
+        return std::min(std::max(x, lims[a][0]), lims[a][1]);
+      };
+
+      Cloud cloud;
+      const int n = integer(2, 30);
+      for (int i=0; i<n; ++i) {
+        cloud.X.push_back(pick(0));
+        cloud.Y.push_back(pick(1));
+        cloud.Z.push_back(pick(2));
+      }
+      cloud.alive.assign(n, 1);
+      MeshGrid grid(cloud.X, cloud.Y, cloud.Z, c, lims);
+      ++grids;
+
+      for (int r=0; r<3; ++r) {
+        const unsigned int victim = (unsigned int)integer(0, n-1);
+        if (!cloud.alive[victim] || grid.get_nObjects() < 3) continue;
+        grid.removeObject(victim);
+        cloud.alive[victim] = 0;
+      }
+      for (int r=0; r<3; ++r) {
+        const double x = pick(0), y = pick(1), z = pick(2);
+        assert(grid.addObject(x, y, z) == cloud.size());
+        cloud.X.push_back(x); cloud.Y.push_back(y); cloud.Z.push_back(z); cloud.alive.push_back(1);
+      }
+
+      for (size_t i=0; i<cloud.size(); ++i) {
+        if (!cloud.alive[i]) continue;
+        const auto own = grid.get_ObjectsInCell(cloud.X[i], cloud.Y[i], cloud.Z[i]);
+        assert(std::find(own.begin(), own.end(), (unsigned int)i) != own.end());
+      }
+
+      for (int q=0; q<6; ++q) {
+        long skip = -1;
+        double x = pick(0), y = pick(1), z = pick(2);
+        if (q%3 == 1) { x = box[0][1]; y = box[1][1]; z = box[2][1]; }
+        if (q%3 == 2) {
+          skip = integer(0, int(cloud.size())-1);
+          if (!cloud.alive[skip]) continue;
+          x = cloud.X[skip]; y = cloud.Y[skip]; z = cloud.Z[skip];
+        }
+        const auto ranked = cloud.ranked(x, y, z, skip);
+        if (ranked.empty()) continue;
+
+        const unsigned int nearest = (skip < 0) ? grid.nearestObject(x, y, z) : grid.nearestObject((unsigned int)skip);
+        assert(cloud.dist_sq(nearest, x, y, z) == ranked.front().first);
+        checkNearestN(grid, cloud, (unsigned int)integer(1, int(ranked.size())), x, y, z, skip);
+
+        const double d2 = ranked[size_t(integer(0, int(ranked.size())-1))].first;
+        checkShell(grid, cloud, x, y, z, radiusAbove(d2), 0., skip);
+        checkShell(grid, cloud, x, y, z, std::numeric_limits<double>::infinity(), radiusBelow(d2), skip);
+      }
+    }
+    assert(grids == 600);
+
+    printf("  points on cell faces, every query against brute force: ok\n");
+  }
+
+
+  // The grown box contains the limits it was given, so a point on a limit is
+  // accepted, as the header promises. Growing each side by half of
+  // (cells*cellsize - range) can come out negative when range/cellsize rounds
+  // down onto an integer; the first case is one where it did, and the sweep
+  // runs ranges within a few ulp of a whole number of cells, where that
+  // happens about once in two thousand.
+  void testBoxContainsLimits ()
+  {
+    {
+      const double c = 5.078493365404232, hi = 3279294.892895552;
+      const std::vector<std::vector<double>> lims = {{0., hi}, {0., 1.}, {0., 1.}};
+      const MeshGrid grid({0., hi}, {0.5, 0.5}, {0.5, 0.5}, c, lims);
+      const auto box = grid.get_lims();
+      assert(box[0][0] <= 0. && box[0][1] >= hi);
+      assert(grid.nearestObject(0., 0.5, 0.5) == 0);
+      assert(grid.nearestObject(hi, 0.5, 0.5) == 1);
+    }
+
+    std::mt19937 gen(4242u);
+    std::uniform_real_distribution<double> cellsizes(0.01, 10.), lows(-1.e4, 1.e4);
+    std::uniform_int_distribution<int> counts(1, 200), steps(-3, 3);
+    for (int t=0; t<20000; ++t) {
+      const double c = cellsizes(gen), lo = lows(gen);
+      double hi = lo+counts(gen)*c;
+      const int k = steps(gen);
+      for (int s=0; s<std::abs(k); ++s) hi = std::nextafter(hi, k > 0 ? 1.e300 : -1.e300);
+      if (hi < lo) continue;
+
+      const std::vector<std::vector<double>> lims = {{lo, hi}, {lo, hi}, {0., 0.}};
+      const MeshGrid grid({lo, hi}, {hi, lo}, {0., 0.}, c, lims);
+      const auto box = grid.get_lims();
+      assert(box[0][0] <= lo && box[0][1] >= hi);
+      assert(box[1][0] <= lo && box[1][1] >= hi);
+    }
+
+    printf("  the grown box contains the limits: ok\n");
+  }
+
+
+  // The extremes of scale the constructor accepts, against brute force with
+  // exact comparisons. Tiny: coordinates near 1e-160 and a cellsize near
+  // 1e-161, where squared distances are subnormal. Huge: a box near 1e153 on
+  // every side, whose squared diagonal is close to the largest double. Every
+  // distance in an accepted box is finite, which is what makes the brute-force
+  // reference meaningful there.
+  void testExtremeScales ()
+  {
+    const double scales[] = {1.e-160, 1.e153};
+    std::mt19937 gen(160u);
+    std::uniform_real_distribution<double> unit(0., 1.);
+
+    for (const double scale : scales) {
+      const std::vector<std::vector<double>> lims = {{-scale, scale}, {-scale, scale}, {-scale, scale}};
+      Cloud cloud;
+      for (int i=0; i<300; ++i) {
+        cloud.X.push_back(scale*(2.*unit(gen)-1.));
+        cloud.Y.push_back(scale*(2.*unit(gen)-1.));
+        cloud.Z.push_back(scale*(2.*unit(gen)-1.));
+      }
+      cloud.X.push_back(scale); cloud.Y.push_back(scale); cloud.Z.push_back(scale);
+      cloud.X.push_back(-scale); cloud.Y.push_back(-scale); cloud.Z.push_back(-scale);
+      cloud.alive.assign(cloud.size(), 1);
+
+      const MeshGrid grid(cloud.X, cloud.Y, cloud.Z, scale/5., lims);
+      std::uniform_int_distribution<unsigned int> pick(0, (unsigned int)cloud.size()-1);
+
+      for (int q=0; q<40; ++q) {
+        const double x = scale*(2.*unit(gen)-1.), y = scale*(2.*unit(gen)-1.), z = scale*(2.*unit(gen)-1.);
+        const auto ranked = cloud.ranked(x, y, z, -1);
+        assert(cloud.dist_sq(grid.nearestObject(x, y, z), x, y, z) == ranked.front().first);
+        checkNearestN(grid, cloud, 7, x, y, z, -1);
+        checkShell(grid, cloud, x, y, z, 0.3*scale, 0., -1);
+        checkShell(grid, cloud, x, y, z, 2.*scale, 1.5*scale, -1);
+
+        const unsigned int index = pick(gen);
+        const double px = cloud.X[index], py = cloud.Y[index], pz = cloud.Z[index];
+        const auto own = cloud.ranked(px, py, pz, (long)index);
+        assert(cloud.dist_sq(grid.nearestObject(index), px, py, pz) == own.front().first);
+        checkNearestN(grid, cloud, 7, px, py, pz, (long)index);
+        checkShell(grid, cloud, px, py, pz, 0.3*scale, 0., (long)index);
+      }
+
+      const unsigned int far = (unsigned int)cloud.size()-1;
+      assert(grid.nearestObjects((unsigned int)cloud.size()-1, far).size() == cloud.size()-1);
+      assert(grid.closeObjects(far, std::numeric_limits<double>::infinity()).size() == cloud.size()-1);
+    }
+
+    printf("  extreme scales against brute force: ok\n");
+  }
+
 }
 
 
@@ -1242,6 +1554,10 @@ int main ()
   testRminBoundary();
   testDuplicates();
   testTieOrder();
+  testCellFaceRounding();
+  testFaceHugging();
+  testBoxContainsLimits();
+  testExtremeScales();
   testDegenerateExtents();
   testConstructorValidation();
   testZeroExtent();
