@@ -293,11 +293,12 @@ the answers. If the call throws, the container's content is unspecified.
 
 ## Reusing an array in Python
 
-Python returns new arrays, but two batches have a result whose shape is known
+Python returns new arrays, but three batches have a result whose shape is known
 before they run, and accept an array to write into instead, through the
-keyword-only argument `out=`: the batched `nearest_objects`, whose result is
-`(n_query, n)`, and the batched `count_objects`, whose result is `(n_query,)`,
-over points or over objects alike. The call fills the array and returns it.
+keyword-only argument `out=`: the batched `nearest_object`, whose result is
+`(n_query,)`, the batched `nearest_objects`, whose result is `(n_query, n)`,
+and the batched `count_objects`, whose result is `(n_query,)`, over points or
+over objects alike. The call fills the array and returns it.
 
 ```{literalinclude} ../examples/example_batch.py
 :language: python
@@ -306,7 +307,7 @@ over points or over objects alike. The call fills the array and returns it.
 ```
 
 The array must already be exactly the result: `uint32` for the indices of
-`nearest_objects` and `int64` for counts, of the exact shape, C-contiguous and
+`nearest_object` and `nearest_objects` and `int64` for counts, of the exact shape, C-contiguous and
 writeable. Anything else is an error, never a silent conversion, since a
 converted copy would be a different array and the one passed in would stay
 unwritten. A wrong dtype, a read-only array, or something that is not an array
