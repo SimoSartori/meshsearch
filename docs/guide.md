@@ -26,7 +26,22 @@ or below 1.
 The constructor takes the box as well, and if it is not given, fits it to the
 data and grows each side to a whole number of cells — so `get_lims` (`lims` in
 Python) can report a box slightly wider than the points, and a point just
-outside the data range may still be accepted.
+outside the data range may still be accepted. The grown box always contains the
+box it was given: where rounding would leave it a hair inside, one more cell is
+added, so a point exactly on a limit is always accepted.
+
+Distances are compared through their squares, computed in double precision as
+`dx*dx + dy*dy + dz*dz`. `closeObjects` returns every object whose squared
+distance lies between `Rmin*Rmin` and `Rmax*Rmax`, both included; the
+nearest-neighbour queries rank objects by the same quantity, ties broken by
+index. The result never depends on how objects fall into cells.
+
+A point within rounding of a face may be
+assigned to the cell on either side of it, and every member agrees on which,
+but no result depends on that choice. For this to hold, every distance inside
+the box has to be a finite double, so a box whose squared diagonal overflows —
+an extent of about 1e154 along an axis — is refused, as is a cellsize whose
+reciprocal overflows.
 
 An axis along which the box has no extent — every point at the same coordinate,
 or limits with `lo == hi` — gets one cell, and the box is grown to one cell side

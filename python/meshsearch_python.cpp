@@ -148,12 +148,15 @@ NB_MODULE(meshsearch, m)
          "Build the grid over the points, which must be of equal length.\n"
          "limits is ((xlo,xhi),(ylo,yhi),(zlo,zhi)); when omitted, the data\n"
          "range padded by a margin proportional to it. Each side of the box\n"
-         "is grown symmetrically to a whole number of cells; an axis of zero\n"
-         "extent gets one cell.\n\n"
+         "is grown symmetrically to a whole number of cells, and always\n"
+         "contains limits: where rounding would leave it inside them, one more\n"
+         "cell is added. An axis of zero extent gets one cell.\n\n"
          "Raises meshsearch.Error for a cellsize that is not finite and\n"
-         "positive, limits that are not finite or have lo > hi, a coordinate\n"
-         "that is not finite or outside limits, or a grid too large to count;\n"
-         "MemoryError if the grid cannot be allocated.")
+         "positive, or so small that 1/cellsize overflows a double; limits\n"
+         "that are not finite or have lo > hi; a coordinate that is not finite\n"
+         "or outside limits; a box whose squared diagonal overflows a double\n"
+         "(an extent of about 1e154 along an axis); or a grid too large to\n"
+         "count. MemoryError if the grid cannot be allocated.")
 
     .def("__len__", &meshsearch::MeshGrid::get_nObjects,
          "Number of objects in the grid, excluding removed ones.")
@@ -215,16 +218,23 @@ NB_MODULE(meshsearch, m)
            const double* px = x.data();
            const double* py = y.data();
            const double* pz = z.data();
-           std::vector<unsigned int> out(queries*size_t(n));
+           // The array is sized only once the first query has passed, so that
+           // an n the grid refuses raises the single-point call's error rather
+           // than attempting an allocation of n_query * n entries first.
+           std::vector<unsigned int> out;
            {
              nb::gil_scoped_release released;
              for (size_t i=0; i<queries; ++i) {
-               try {
-                 const auto found = self.nearestObjects(n, px[i], py[i], pz[i]);
-                 std::copy(found.begin(), found.end(), out.begin()+i*size_t(n));
-               }
+               std::vector<unsigned int> found;
+               try { found = self.nearestObjects(n, px[i], py[i], pz[i]); }
                catch (const meshsearch::IndexError& e) { throw meshsearch::IndexError(queryPrefix(i)+e.what()); }
                catch (const meshsearch::Error& e) { throw meshsearch::Error(queryPrefix(i)+e.what()); }
+               if (i == 0) {
+                 if (size_t(n) != 0 && queries > std::numeric_limits<size_t>::max()/size_t(n))
+                   throw meshsearch::Error("the batch holds more results than 64-bit sizes can count");
+                 out.resize(queries*size_t(n));
+               }
+               std::copy(found.begin(), found.end(), out.begin()+i*size_t(n));
              }
            }
            return indexArray2D(std::move(out), queries, n);
@@ -233,7 +243,10 @@ NB_MODULE(meshsearch, m)
          "The n objects nearest to each of an array of points, nearest first;\n"
          "ties by ascending index: an (n_query, n) array, rectangular because\n"
          "every query returns exactly n. A tie at the last place keeps the\n"
-         "lower indices.")
+         "lower indices. The array is allocated only after the first query\n"
+         "has succeeded, so an n the grid refuses raises that query's\n"
+         "meshsearch.Error rather than MemoryError; meshsearch.Error also if\n"
+         "n_query * n exceeds what 64-bit sizes can count.")
 
     .def("nearest_objects",
          [](const meshsearch::MeshGrid& self, const unsigned int n,

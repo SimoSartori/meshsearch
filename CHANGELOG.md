@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `nearestObject` (both overloads; `nearest_object` in Python) could return an
+  object that was not the nearest when an object lay within a few ulp of a
+  cell face: the search stopped one shell early with no allowance for
+  rounding.
+- `closeObjects` (both overloads; `close_objects` in Python) could miss an
+  object at exactly `Rmax` when it lay within a few ulp of a cell face, and
+  could miss objects at or beyond `Rmin` when the cellsize was comparable to
+  the spacing of doubles at the coordinates' magnitude (|coordinate| /
+  cellsize around 1e15 or more). Both ends of the range of shells it visits
+  now carry a proven margin for rounding.
+- The constructor could grow the box to slightly *inside* the given limits,
+  when the range divided by the cellsize rounded down onto a whole number,
+  and then refuse a point lying exactly on a limit. The grown box now always
+  contains the limits: where rounding would leave it inside, one more cell is
+  added along that axis. For limits where that happens, `get_nCells` and
+  `get_lims` report one more cell than 0.2.1, and the order of `closeObjects`
+  results can differ from 0.2.1.
+- Distances above about 1.3e154 overflowed to infinity, so `nearestObject`
+  could report that no object was found while objects were present, and
+  `closeObjects` could return objects beyond `Rmax`. Such boxes are now
+  refused (see below).
+- A cellsize below about 5.6e-309 made cell assignment undefined behaviour.
+  It is now refused (see below).
+- Python: a batched `nearest_objects` call allocated `n_query * n` entries
+  before checking `n`, so an `n` larger than the grid could fail with
+  `MemoryError`, and a product beyond 64 bits could wrap around. The array is
+  now sized after the first query has succeeded, so such an `n` raises that
+  query's `meshsearch.Error`, and a product that 64-bit sizes cannot count
+  raises `meshsearch.Error`.
+
+### Changed
+
+- The constructor raises `meshsearch::Error` for a cellsize whose reciprocal
+  overflows a double, and for a box whose squared diagonal, computed from the
+  grown box, overflows a double (an extent of about 1e154 along an axis).
+  Within an accepted box every distance is a finite double.
+- A search no longer stops early while the distance it has covered is below
+  about 1e-150, where squared distances are subnormal and rounding errors are
+  no longer relative; nor while the threshold it compares against is above
+  about 1e301. With a cellsize that small a query may visit every cell.
+  Results are unchanged.
+- `closeObjects` with `Rmin > 0` starts its walk up to two shells closer to
+  the query than before. Results and their order are unchanged.
+
 ## 0.2.1 — 2026-10-20
 
 ### Changed

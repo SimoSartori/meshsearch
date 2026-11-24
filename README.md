@@ -114,11 +114,13 @@ radius and is returned.
 
 The constructor checks its input before allocating anything. It raises
 `meshsearch::Error` for a cellsize that is not finite and positive, for limits
-that are not finite or have `lo > hi`, for a coordinate that is not finite, and
-for a grid too large to count: more than 2147483647 cells along an axis, or
-more than 4294967295 objects. Running out of memory is not translated: it is
-`std::bad_alloc` in C++ and `MemoryError` in Python, and an `addObject` that
-fails that way leaves the grid as it was.
+that are not finite or have `lo > hi`, for a coordinate that is not finite, for
+a cellsize so small that its reciprocal overflows a double, for a box so large
+that the square of its diagonal overflows a double (an extent of about 1e154
+along an axis), and for a grid too large to count: more than 2147483647 cells
+along an axis, or more than 4294967295 objects. Running out of memory is not
+translated: it is `std::bad_alloc` in C++ and `MemoryError` in Python, and an
+`addObject` that fails that way leaves the grid as it was.
 
 Const members may be called concurrently on one grid; non-const members may
 not.
