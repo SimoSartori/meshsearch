@@ -61,8 +61,15 @@ add_library(meshsearch::meshsearch ALIAS meshsearch)
 # and the link fails on Linux; Clang on macOS is position-independent anyway.
 set_target_properties(meshsearch PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# meshsearch/Version.h, with MESHSEARCH_VERSION and its parts, comes from the
+# project version above, the one place the version is written for C++. It is
+# generated into the build tree, so it never goes stale in the source tree.
+set(MESHSEARCH_GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
+configure_file(cmake/Version.h.in ${MESHSEARCH_GENERATED_DIR}/meshsearch/Version.h @ONLY)
+
 target_include_directories(meshsearch PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<BUILD_INTERFACE:${MESHSEARCH_GENERATED_DIR}>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 
 target_compile_features(meshsearch PUBLIC cxx_std_17)
@@ -99,6 +106,12 @@ if (MESHSEARCH_BUILD_TESTS)
   target_compile_options(test_periodic PRIVATE ${MESHSEARCH_PRIVATE_OPTIONS})
 
   add_test(NAME periodic COMMAND test_periodic)
+
+  add_executable(test_api tests/test_api.cpp)
+  target_link_libraries(test_api PRIVATE meshsearch)
+  target_compile_options(test_api PRIVATE ${MESHSEARCH_PRIVATE_OPTIONS})
+
+  add_test(NAME api COMMAND test_api)
 
   # The forms test queries one grid from several threads.
   find_package(Threads REQUIRED)
@@ -146,6 +159,8 @@ if (MESHSEARCH_INSTALL)
   install(TARGETS meshsearch EXPORT meshsearchTargets
           ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
   install(DIRECTORY include/meshsearch DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+  install(FILES ${MESHSEARCH_GENERATED_DIR}/meshsearch/Version.h
+          DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/meshsearch)
 
   install(EXPORT meshsearchTargets
           NAMESPACE meshsearch::
@@ -155,11 +170,17 @@ if (MESHSEARCH_INSTALL)
     ${CMAKE_CURRENT_BINARY_DIR}/meshsearchConfig.cmake
     INSTALL_DESTINATION ${MESHSEARCH_CMAKE_DIR})
 
-  # Before 1.0 a minor release may change the interface, so a request for 0.2
-  # accepts any 0.2.x and nothing else.
+  # From 1.0 a request for major version N accepts any N.x.y. Before it a minor
+  # release may change the interface, so a request for 0.2 accepts any 0.2.x
+  # and nothing else.
+  if (PROJECT_VERSION_MAJOR EQUAL 0)
+    set(MESHSEARCH_COMPATIBILITY SameMinorVersion)
+  else()
+    set(MESHSEARCH_COMPATIBILITY SameMajorVersion)
+  endif()
   write_basic_package_version_file(
     ${CMAKE_CURRENT_BINARY_DIR}/meshsearchConfigVersion.cmake
-    COMPATIBILITY SameMinorVersion)
+    COMPATIBILITY ${MESHSEARCH_COMPATIBILITY})
 
   install(FILES ${CMAKE_CURRENT_BINARY_DIR}/meshsearchConfig.cmake
                 ${CMAKE_CURRENT_BINARY_DIR}/meshsearchConfigVersion.cmake

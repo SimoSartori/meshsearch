@@ -28,22 +28,14 @@ namespace meshsearch {
   };
 
 
-  /// Cell offset relative to a target cell. Implementation detail, not part
-  /// of the interface.
-  struct GridOffset {
-    int i;  ///< offset along x, in cells
-    int j;  ///< offset along y, in cells
-    int k;  ///< offset along z, in cells
-  };
-
-
   /**
    *  @brief Uniform cubic mesh over a set of points, for neighbour queries.
    *
    *  Objects are identified by the index of their coordinates as passed to the
    *  constructor. Indices are stable: removeObject leaves an index permanently
    *  invalid, addObject issues a new one, and indices are never reused or
-   *  renumbered. Naming a removed index raises.
+   *  renumbered. Every member taking an index raises IndexError on an index
+   *  that is out of range or removed, except isAlive, which answers false.
    *
    *  Const members may be called concurrently on the same grid. Non-const
    *  members may not.
@@ -56,16 +48,25 @@ namespace meshsearch {
    *  translated into Error. A constructor that throws builds nothing, and
    *  addObject leaves the grid as it was if it throws.
    *
-   *  GridOffset and the protected members are implementation details: they
-   *  are not part of the interface and may change between versions.
+   *  The class is final, and everything below the public members is private.
+   *  Copies are deep, apart from a table that depends only on the geometry
+   *  and is shared. Moves transfer the storage without copying it; a
+   *  moved-from grid may only be destroyed or assigned to.
+   *
+   *  The order of the objects within one cell, and so of the results of
+   *  get_objectsInCell and closeObjects, is unspecified.
    */
-  class MeshGrid {
+  class MeshGrid final {
 
   public:
 
     /// Empty grid. Every member raises or returns empty until it is assigned to.
     MeshGrid () = default;
 
+    MeshGrid (const MeshGrid&) = default;
+    MeshGrid (MeshGrid&&) noexcept = default;
+    MeshGrid& operator= (const MeshGrid&) = default;
+    MeshGrid& operator= (MeshGrid&&) noexcept = default;
     ~MeshGrid () = default;
 
     /// Construction options.
@@ -158,12 +159,37 @@ namespace meshsearch {
     /// Number of objects in the grid, excluding removed ones.
     unsigned int get_nObjects () const;
 
-    /// True if @p index names an object still in the grid.
+    /// True if @p index names an object still in the grid; false if it is out
+    /// of range or removed. The one member taking an index that does not raise.
     bool isAlive (unsigned int index) const;
 
+    /// isAlive for each index, in order: 1 or 0.
+    std::vector<std::uint8_t> isAlive (const std::vector<unsigned int>& indices) const;
+
+    /// As above, into @p out, which is cleared first and keeps its capacity.
+    void isAlive (const std::vector<unsigned int>& indices,
+                  std::vector<std::uint8_t>& out) const;
+
+    /// True if a query at the point is accepted, that is, if the point lies
+    /// in the box: the test every member taking a point applies. False for a
+    /// NaN coordinate, and for every point on a default-constructed grid.
+    bool contains (double X, double Y, double Z) const;
+
+    /// contains for each point (X[i], Y[i], Z[i]), in order: 1 or 0.
+    /// @throw Error if the vectors differ in length
+    std::vector<std::uint8_t> contains (const std::vector<double>& X,
+                                        const std::vector<double>& Y,
+                                        const std::vector<double>& Z) const;
+
+    /// As above, into @p out, which is cleared first and keeps its capacity.
+    void contains (const std::vector<double>& X,
+                   const std::vector<double>& Y,
+                   const std::vector<double>& Z,
+                   std::vector<std::uint8_t>& out) const;
+
     /// The box: grown to whole cells on a non-periodic axis, exactly the
-    /// limits given on a periodic one.
-    std::vector<std::vector<double>> get_lims () const;
+    /// limits given on a periodic one. All zeros on a default-constructed grid.
+    std::array<std::array<double,2>,3> get_lims () const;
 
     /// Cells per axis.
     std::array<unsigned int, 3> get_nCells () const;
@@ -448,19 +474,19 @@ namespace meshsearch {
      *  cell, so an object is always among the objects in the cell of its own
      *  coordinates.
      */
-    size_t get_Cell (double X, double Y, double Z) const;
+    size_t get_cell (double X, double Y, double Z) const;
 
     /**
      *  @brief Cell coordinates {ix, iy, iz} of the cell containing a point.
      *  @throw Error if the point is outside the box
      */
-    std::array<unsigned int, 3> get_CellCoords (double X, double Y, double Z) const;
+    std::array<unsigned int, 3> get_cellCoords (double X, double Y, double Z) const;
 
     /**
      *  @brief Objects in the cell containing a point.
      *  @throw Error if the point is outside the box
      */
-    std::vector<unsigned int> get_ObjectsInCell (double X, double Y, double Z) const;
+    std::vector<unsigned int> get_objectsInCell (double X, double Y, double Z) const;
 
     /**
      *  @brief Remove an object from the grid.
@@ -484,7 +510,14 @@ namespace meshsearch {
      */
     unsigned int addObject (double X, double Y, double Z);
 
-  protected:
+  private:
+
+    /// Cell offset relative to a target cell.
+    struct GridOffset {
+      int i;  ///< offset along x, in cells
+      int j;  ///< offset along y, in cells
+      int k;  ///< offset along z, in cells
+    };
 
     /// Slots of one cell: its objects fill @c count slots from @c start, in
     /// insertion order, and spare slots follow up to @c cap.
@@ -517,7 +550,7 @@ namespace meshsearch {
     std::array<unsigned int, 3> m_nCells = {0, 0, 0};
 
     /// The box, grown to whole cells, as {{xlo,xhi},{ylo,yhi},{zlo,zhi}}.
-    std::vector<std::vector<double>> m_lims;
+    std::array<std::array<double,2>,3> m_lims{};
 
     /// Per axis, whether it is periodic, and whether any is.
     std::array<bool, 3> m_periodic = {false, false, false};

@@ -183,12 +183,23 @@ namespace {
     size_t m_N, m_cap;
   };
 
-  std::array<unsigned int, 3> locate (const std::vector<std::vector<double>>& lims,
+  using Lims = std::array<std::array<double,2>,3>;
+
+  bool inBox (const std::array<unsigned int, 3>& nCells, const Lims& lims,
+              const double X, const double Y, const double Z)
+  {
+    return nCells[0] != 0
+      && X >= lims[0][0] && X <= lims[0][1]
+      && Y >= lims[1][0] && Y <= lims[1][1]
+      && Z >= lims[2][0] && Z <= lims[2][1];
+  }
+
+  std::array<unsigned int, 3> locate (const Lims& lims,
                                       const std::array<unsigned int, 3>& nCells,
                                       const double cellsize,
                                       const double X, const double Y, const double Z)
   {
-    if (lims.size() != 3) throw meshsearch::Error("the grid holds no box");
+    if (nCells[0] == 0) throw meshsearch::Error("the grid holds no box");
     if (!(X >= lims[0][0]) || !(X <= lims[0][1])) throw meshsearch::Error("X coordinate outside the box");
     if (!(Y >= lims[1][0]) || !(Y <= lims[1][1])) throw meshsearch::Error("Y coordinate outside the box");
     if (!(Z >= lims[2][0]) || !(Z <= lims[2][1])) throw meshsearch::Error("Z coordinate outside the box");
@@ -249,7 +260,7 @@ namespace {
     double cellsize;
   };
 
-  CellFaces cellFaces (const std::vector<std::vector<double>>& lims,
+  CellFaces cellFaces (const Lims& lims,
                        const std::array<unsigned int, 3>& nCells,
                        const double cellsize)
   {
@@ -263,7 +274,7 @@ namespace {
     return faces;
   }
 
-  CellFaces periodicFaces (const std::vector<std::vector<double>>& lims,
+  CellFaces periodicFaces (const Lims& lims,
                            const std::array<unsigned int, 3>& nCells,
                            const double cellsize,
                            const std::array<bool, 3>& periodic,
@@ -516,7 +527,7 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
 
   m_cellsize = side;
   m_nCells = nCells;
-  m_lims = {{grownLo[0], grownHi[0]}, {grownLo[1], grownHi[1]}, {grownLo[2], grownHi[2]}};
+  m_lims = {{{{grownLo[0], grownHi[0]}}, {{grownLo[1], grownHi[1]}}, {{grownLo[2], grownHi[2]}}}};
   m_periodic = opt.periodic;
   m_periodic_any = any_periodic;
   for (int i=0; i<3; ++i) {
@@ -644,7 +655,67 @@ bool meshsearch::MeshGrid::isAlive (const unsigned int index) const
 // ===========================================================================
 
 
-std::vector<std::vector<double>> meshsearch::MeshGrid::get_lims () const
+std::vector<std::uint8_t> meshsearch::MeshGrid::isAlive (const std::vector<unsigned int>& indices) const
+{
+  std::vector<std::uint8_t> out;
+  isAlive(indices, out);
+  return out;
+}
+
+
+// ===========================================================================
+
+
+void meshsearch::MeshGrid::isAlive (const std::vector<unsigned int>& indices, std::vector<std::uint8_t>& out) const
+{
+  out.clear();
+  out.reserve(indices.size());
+  for (const unsigned int index : indices) out.push_back(isAlive(index) ? 1 : 0);
+}
+
+
+// ===========================================================================
+
+
+bool meshsearch::MeshGrid::contains (const double X, const double Y, const double Z) const
+{
+  return inBox(m_nCells, m_lims, X, Y, Z);
+}
+
+
+// ===========================================================================
+
+
+std::vector<std::uint8_t> meshsearch::MeshGrid::contains (const std::vector<double>& X,
+                                                          const std::vector<double>& Y,
+                                                          const std::vector<double>& Z) const
+{
+  std::vector<std::uint8_t> out;
+  contains(X, Y, Z, out);
+  return out;
+}
+
+
+// ===========================================================================
+
+
+void meshsearch::MeshGrid::contains (const std::vector<double>& X,
+                                     const std::vector<double>& Y,
+                                     const std::vector<double>& Z,
+                                     std::vector<std::uint8_t>& out) const
+{
+  if (X.size() != Y.size() || X.size() != Z.size())
+    throw Error("the coordinate vectors differ in length");
+  out.clear();
+  out.reserve(X.size());
+  for (size_t i=0; i<X.size(); ++i) out.push_back(inBox(m_nCells, m_lims, X[i], Y[i], Z[i]) ? 1 : 0);
+}
+
+
+// ===========================================================================
+
+
+std::array<std::array<double,2>,3> meshsearch::MeshGrid::get_lims () const
 {
   return m_lims;
 }
@@ -1417,7 +1488,7 @@ std::size_t meshsearch::MeshGrid::countObjects (const unsigned int index,
 // ===========================================================================
 
 
-size_t meshsearch::MeshGrid::get_Cell (const double X, const double Y, const double Z) const
+size_t meshsearch::MeshGrid::get_cell (const double X, const double Y, const double Z) const
 {
   const auto coords = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
   return getLinearIndex(coords[0], coords[1], coords[2]);
@@ -1427,7 +1498,7 @@ size_t meshsearch::MeshGrid::get_Cell (const double X, const double Y, const dou
 // ===========================================================================
 
 
-std::array<unsigned int, 3> meshsearch::MeshGrid::get_CellCoords (const double X, const double Y, const double Z) const
+std::array<unsigned int, 3> meshsearch::MeshGrid::get_cellCoords (const double X, const double Y, const double Z) const
 {
   return locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
 }
@@ -1436,7 +1507,7 @@ std::array<unsigned int, 3> meshsearch::MeshGrid::get_CellCoords (const double X
 // ===========================================================================
 
 
-std::vector<unsigned int> meshsearch::MeshGrid::get_ObjectsInCell (const double X, const double Y, const double Z) const
+std::vector<unsigned int> meshsearch::MeshGrid::get_objectsInCell (const double X, const double Y, const double Z) const
 {
   const auto coords = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
   const CellBlock& block = m_cells[getLinearIndex(coords[0], coords[1], coords[2])];

@@ -258,18 +258,20 @@ namespace {
 
     MeshGrid empty;
     assert(empty.get_nObjects() == 0);
-    assert(empty.get_lims().empty());
+    // get_lims returns a fixed-size array, so a grid with no box reports
+    // zeros, and get_nCells tells such a grid apart.
+    assert((empty.get_lims() == std::array<std::array<double,2>,3>{}));
     assert(empty.get_cellsize() == 0.);
     assert(!empty.isAlive(0));
     ASSERT_THROWS(empty.nearestObject(0., 0., 0.));
     ASSERT_THROWS_INDEX(empty.nearestObject(0u));
-    ASSERT_THROWS(empty.get_Cell(0., 0., 0.));
+    ASSERT_THROWS(empty.get_cell(0., 0., 0.));
     ASSERT_THROWS(empty.closeObjects(0., 0., 0., 1.));
     ASSERT_THROWS(empty.addObject(0., 0., 0.));
 
     const MeshGrid noObjects({}, {}, {}, 1., boxOf({{0., 4.}, {0., 4.}, {0., 4.}}));
     assert(noObjects.get_nObjects() == 0);
-    assert(noObjects.get_ObjectsInCell(1., 1., 1.).empty());
+    assert(noObjects.get_objectsInCell(1., 1., 1.).empty());
     assert(noObjects.nearestObjects(0, 1., 1., 1.).empty());
     assert(noObjects.closeObjects(1., 1., 1., 2.).empty());
     ASSERT_THROWS(noObjects.nearestObject(1., 1., 1.));
@@ -278,7 +280,7 @@ namespace {
   }
 
 
-  // get_Cell, get_CellCoords and get_ObjectsInCell over the whole grid, and
+  // get_cell, get_cellCoords and get_objectsInCell over the whole grid, and
   // the box's closed upper end.
   void testCells ()
   {
@@ -289,28 +291,28 @@ namespace {
     assert(grid.get_nCells()[1] == 4);
     assert(grid.get_nCells()[2] == 2);
 
-    const auto first = grid.get_CellCoords(0., 0., 0.);
+    const auto first = grid.get_cellCoords(0., 0., 0.);
     assert(first[0] == 0 && first[1] == 0 && first[2] == 0);
-    assert(grid.get_Cell(0., 0., 0.) == 0);
+    assert(grid.get_cell(0., 0., 0.) == 0);
 
     // The upper face. The box is closed at both ends, so (10,4,2), the far
     // corner, exactly on the upper face of all three axes, is inside it and
     // must be accepted. Dividing by the cellsize there gives 10, 4 and 2,
     // which are one past the last cell on each axis, so the point belongs to
     // the last cell, (9,3,1), and not to a cell that does not exist.
-    const auto last = grid.get_CellCoords(10., 4., 2.);
+    const auto last = grid.get_cellCoords(10., 4., 2.);
     assert(last[0] == 9 && last[1] == 3 && last[2] == 1);
-    assert(grid.get_Cell(10., 4., 2.) == 9*4*2+3*2+1);
+    assert(grid.get_cell(10., 4., 2.) == 9*4*2+3*2+1);
 
     // One axis at a time, in case an axis is handled separately.
-    const auto edgeX = grid.get_CellCoords(10., 0.5, 0.5);
+    const auto edgeX = grid.get_cellCoords(10., 0.5, 0.5);
     assert(edgeX[0] == 9);
-    const auto edgeY = grid.get_CellCoords(0.5, 4., 0.5);
+    const auto edgeY = grid.get_cellCoords(0.5, 4., 0.5);
     assert(edgeY[1] == 3);
-    const auto edgeZ = grid.get_CellCoords(0.5, 0.5, 2.);
+    const auto edgeZ = grid.get_cellCoords(0.5, 0.5, 2.);
     assert(edgeZ[2] == 1);
 
-    const auto mid = grid.get_CellCoords(3.7, 2.2, 1.5);
+    const auto mid = grid.get_cellCoords(3.7, 2.2, 1.5);
     assert(mid[0] == 3 && mid[1] == 2 && mid[2] == 1);
 
     // Walk every cell centre: the coordinates must round-trip, and the linear
@@ -324,25 +326,25 @@ namespace {
           const double x = (ix+0.5)*grid.get_cellsize();
           const double y = (iy+0.5)*grid.get_cellsize();
           const double z = (iz+0.5)*grid.get_cellsize();
-          const auto coords = grid.get_CellCoords(x, y, z);
+          const auto coords = grid.get_cellCoords(x, y, z);
           assert(coords[0] == ix && coords[1] == iy && coords[2] == iz);
-          const size_t linear = grid.get_Cell(x, y, z);
+          const size_t linear = grid.get_cell(x, y, z);
           assert(linear < total);
           assert(seen[linear] == 0);
           seen[linear] = 1;
         }
 
-    const auto inCell = grid.get_ObjectsInCell(0.9, 0.9, 0.9);
+    const auto inCell = grid.get_objectsInCell(0.9, 0.9, 0.9);
     assert(inCell.size() == 1 && inCell[0] == 0);
-    assert(grid.get_ObjectsInCell(5.5, 2.5, 1.5).empty());
+    assert(grid.get_objectsInCell(5.5, 2.5, 1.5).empty());
 
     // Same thing through addObject and a query: an object added exactly on the
     // far corner of the box must land in the last cell and be findable there.
     MeshGrid onFace({0.}, {0.}, {0.}, 1., boxOf({{0., 3.}, {0., 3.}, {0., 3.}}));
     const unsigned int corner = onFace.addObject(3., 3., 3.);
-    const auto cell = onFace.get_ObjectsInCell(3., 3., 3.);
+    const auto cell = onFace.get_objectsInCell(3., 3., 3.);
     assert(cell.size() == 1 && cell[0] == corner);
-    assert(onFace.get_CellCoords(3., 3., 3.)[0] == 2);
+    assert(onFace.get_cellCoords(3., 3., 3.)[0] == 2);
     assert(onFace.nearestObject(3., 3., 3.) == corner);
     assert(onFace.nearestObject(2.9, 2.9, 2.9) == corner);
 
@@ -382,9 +384,9 @@ namespace {
     ASSERT_THROWS(cgrid.nearestObject(-1., 1., 1.));
     ASSERT_THROWS(cgrid.nearestObjects(1, out, 1., 1.));
     ASSERT_THROWS(cgrid.closeObjects(out, 1., 1., 1.));
-    ASSERT_THROWS(cgrid.get_Cell(out, 1., 1.));
-    ASSERT_THROWS(cgrid.get_CellCoords(out, 1., 1.));
-    ASSERT_THROWS(cgrid.get_ObjectsInCell(out, 1., 1.));
+    ASSERT_THROWS(cgrid.get_cell(out, 1., 1.));
+    ASSERT_THROWS(cgrid.get_cellCoords(out, 1., 1.));
+    ASSERT_THROWS(cgrid.get_objectsInCell(out, 1., 1.));
     ASSERT_THROWS(grid.addObject(out, 1., 1.));
 
     ASSERT_THROWS_INDEX(cgrid.nearestObject(3u));
@@ -435,9 +437,9 @@ namespace {
     ASSERT_THROWS(cgrid.nearestObject(1., 1., nan_coord));
     ASSERT_THROWS(cgrid.nearestObjects(1, nan_coord, 1., 1.));
     ASSERT_THROWS(cgrid.closeObjects(nan_coord, 1., 1., 1.));
-    ASSERT_THROWS(cgrid.get_Cell(nan_coord, 1., 1.));
-    ASSERT_THROWS(cgrid.get_CellCoords(1., nan_coord, 1.));
-    ASSERT_THROWS(cgrid.get_ObjectsInCell(1., 1., nan_coord));
+    ASSERT_THROWS(cgrid.get_cell(nan_coord, 1., 1.));
+    ASSERT_THROWS(cgrid.get_cellCoords(1., nan_coord, 1.));
+    ASSERT_THROWS(cgrid.get_objectsInCell(1., 1., nan_coord));
     ASSERT_THROWS(grid.addObject(nan_coord, 1., 1.));
     ASSERT_THROWS(cgrid.nearestObject(inf_radius, 1., 1.));
     ASSERT_THROWS(grid.addObject(1., -inf_radius, 1.));
@@ -512,12 +514,12 @@ namespace {
       if (!cloud.alive[i]) continue;
       assert(grid.isAlive((unsigned int)i));
       ASSERT_OK(grid.nearestObject((unsigned int)i));
-      const auto cell = grid.get_ObjectsInCell(cloud.X[i], cloud.Y[i], cloud.Z[i]);
+      const auto cell = grid.get_objectsInCell(cloud.X[i], cloud.Y[i], cloud.Z[i]);
       assert(std::find(cell.begin(), cell.end(), (unsigned int)i) != cell.end());
     }
 
     for (const auto i : removed) {
-      const auto cell = grid.get_ObjectsInCell(cloud.X[i], cloud.Y[i], cloud.Z[i]);
+      const auto cell = grid.get_objectsInCell(cloud.X[i], cloud.Y[i], cloud.Z[i]);
       assert(std::find(cell.begin(), cell.end(), i) == cell.end());
     }
 
@@ -895,8 +897,8 @@ namespace {
     // scanned and the object lies exactly on the outer edge.
     {
       const MeshGrid grid({10.75, 13.}, {10.5, 10.5}, {10.5, 10.5}, 1., boxOf(lims));
-      assert(grid.get_CellCoords(10.75, 10.5, 10.5)[0] == 10);
-      assert(grid.get_CellCoords(13., 10.5, 10.5)[0] == 13);
+      assert(grid.get_cellCoords(10.75, 10.5, 10.5)[0] == 10);
+      assert(grid.get_cellCoords(13., 10.5, 10.5)[0] == 13);
       assert(sorted(grid.closeObjects(10.75, 10.5, 10.5, 2.25)) == std::vector<unsigned int>({0, 1}));
       assert(sorted(grid.closeObjects(0u, 2.25)) == std::vector<unsigned int>({1}));
       assert(grid.closeObjects(0u, 2.25, 2.25).size() == 1);
@@ -1285,8 +1287,8 @@ namespace {
       assert(0.7-q == 0.3);
 
       const MeshGrid grid({0.7}, {0.}, {0.}, 0.1, boxOf(lims));
-      assert(grid.get_CellCoords(0.7, 0., 0.)[0] == 7);
-      assert(grid.get_CellCoords(q, 0., 0.)[0] == 3);
+      assert(grid.get_cellCoords(0.7, 0., 0.)[0] == 7);
+      assert(grid.get_cellCoords(q, 0., 0.)[0] == 3);
       assert(grid.closeObjects(q, 0., 0., 0.3) == std::vector<unsigned int>({0}));
       assert(grid.closeObjects(q, 0., 0., 0.3, 0.3) == std::vector<unsigned int>({0}));
 
@@ -1436,7 +1438,7 @@ namespace {
 
       for (size_t i=0; i<cloud.size(); ++i) {
         if (!cloud.alive[i]) continue;
-        const auto own = grid.get_ObjectsInCell(cloud.X[i], cloud.Y[i], cloud.Z[i]);
+        const auto own = grid.get_objectsInCell(cloud.X[i], cloud.Y[i], cloud.Z[i]);
         assert(std::find(own.begin(), own.end(), (unsigned int)i) != own.end());
       }
 

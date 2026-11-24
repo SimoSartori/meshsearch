@@ -46,7 +46,7 @@ namespace {
     return IndexArray(held->data(), {held->size()}, owner);
   }
 
-  LimsArray limsArray (const std::vector<std::vector<double>>& lims)
+  LimsArray limsArray (const std::array<std::array<double,2>,3>& lims)
   {
     auto* held = new std::array<double, 6>();
     for (size_t i=0; i<3; ++i) {
@@ -321,7 +321,7 @@ NB_MODULE(meshsearch, m)
     .def("__len__", &meshsearch::MeshGrid::get_nObjects,
          "Number of objects in the grid, excluding removed ones.")
 
-    .def("is_alive", &meshsearch::MeshGrid::isAlive, "index"_a,
+    .def("is_alive", static_cast<bool (meshsearch::MeshGrid::*)(unsigned int) const>(&meshsearch::MeshGrid::isAlive), "index"_a,
          "True if index names an object still in the grid.")
 
     // The array owns its data through a capsule, so it must not be handed out
@@ -742,19 +742,19 @@ NB_MODULE(meshsearch, m)
          "Number of objects close_objects would return for an object, which\n"
          "is excluded, counted without collecting them.")
 
-    .def("get_cell", &meshsearch::MeshGrid::get_Cell, "x"_a, "y"_a, "z"_a,
+    .def("get_cell", &meshsearch::MeshGrid::get_cell, "x"_a, "y"_a, "z"_a,
          "Linear index of the cell containing a point.")
 
     .def("get_cell_coords",
          [](const meshsearch::MeshGrid& self, const double x, const double y, const double z) {
-           return triple(self.get_CellCoords(x, y, z));
+           return triple(self.get_cellCoords(x, y, z));
          },
          "x"_a, "y"_a, "z"_a,
          "Cell coordinates (ix, iy, iz) of the cell containing a point.")
 
     .def("get_objects_in_cell",
          [](const meshsearch::MeshGrid& self, const double x, const double y, const double z) {
-           return indexArray(self.get_ObjectsInCell(x, y, z));
+           return indexArray(self.get_objectsInCell(x, y, z));
          },
          "x"_a, "y"_a, "z"_a,
          "Objects in the cell containing a point.")
