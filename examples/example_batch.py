@@ -106,8 +106,8 @@ print(f"  object {busiest} is a neighbour of "
 # Repeated batches of the same shape can write into one array instead of
 # allocating a new one each time: pass it as out=, and the call fills it and
 # returns it. The array must already be exactly the result -- uint32 of shape
-# (n_query, n) for nearest_objects, int64 of shape (n_query,) for
-# count_objects, C-contiguous -- or the call raises; it is never converted.
+# (n_query,) for nearest_object, uint32 of shape (n_query, n) for
+# nearest_objects, int64 of shape (n_query,) for count_objects, C-contiguous -- or the call raises; it is never converted.
 # close_objects has no out=, because its length is only known afterwards.
 neighbours = np.empty((len(qx), 5), dtype=np.uint32)
 tally = np.empty(len(qx), dtype=np.int64)
@@ -116,6 +116,9 @@ for r in (0.01, 0.02, 0.04):
     print(f"  within {r}: {int(tally.sum())} neighbours over all queries")
 grid.nearest_objects(5, qx, qy, qz, out=neighbours)
 assert np.array_equal(neighbours, five)
+closest = np.empty(len(qx), dtype=np.uint32)
+grid.nearest_object(qx, qy, qz, out=closest)
+assert np.array_equal(closest, nearest)
 
 # The GIL is released while a batch runs, so other threads can work, including
 # other queries on the same grid. None may modify the grid (add_object,

@@ -348,8 +348,12 @@ NB_MODULE(meshsearch, m)
                  "Per axis, whether the box is periodic: a tuple of three bools.")
 
     .def("nearest_object",
-         [](const meshsearch::MeshGrid& self, const Coords& x, const Coords& y, const Coords& z) {
+         [](const meshsearch::MeshGrid& self, const Coords& x, const Coords& y, const Coords& z,
+            const nb::object& out) -> nb::object {
            const size_t queries = batchSize(x, y, z);
+           OutArray target;
+           unsigned int* dest = nullptr;
+           if (!out.is_none()) dest = outBuffer<unsigned int>(target, out, {queries}, "uint32");
            std::vector<unsigned int> found;
            {
              nb::gil_scoped_release released;
@@ -357,14 +361,23 @@ NB_MODULE(meshsearch, m)
              runBatch(queries,
                       [&] { self.nearestObject(X, Y, Z, found); },
                       [&] (const size_t i) { self.nearestObject(X[i], Y[i], Z[i]); });
+             if (dest != nullptr) std::copy(found.begin(), found.end(), dest);
            }
-           return indexArray(std::move(found));
+           if (dest != nullptr) return out;
+           return nb::cast(indexArray(std::move(found)));
          },
-         "x"_a, "y"_a, "z"_a,
+         "x"_a, "y"_a, "z"_a, nb::kw_only(), "out"_a = nb::none(),
          "The object nearest to each of an array of points: a uint32 array\n"
          "with one index per query, in query order.\n"
          "A large batch is answered in cell order internally, which is faster;\n"
          "the results are always in query order.\n\n"
+         "out, keyword-only, is an array to write the result into instead of\n"
+         "allocating one, and is then returned. It must already be exactly\n"
+         "the result: a writeable, C-contiguous uint32 array of shape\n"
+         "(n_query,). Nothing is converted: a wrong dtype, a read-only array\n"
+         "or something that is not an array raises TypeError; a wrong shape\n"
+         "or a non-contiguous array raises meshsearch.Error. out is checked\n"
+         "before any query runs, and is not written to if the call raises.\n\n"
          "Raises meshsearch.Error, naming the first query that fails, where\n"
          "the single-point call would, and returns nothing partial; also if\n"
          "the arrays differ in length, or if the grid is empty, even for an\n"
@@ -374,7 +387,11 @@ NB_MODULE(meshsearch, m)
          "call returns.")
 
     .def("nearest_object",
-         [](const meshsearch::MeshGrid& self, const Indices& indices) {
+         [](const meshsearch::MeshGrid& self, const Indices& indices, const nb::object& out) -> nb::object {
+           const size_t queries = indices.shape(0);
+           OutArray target;
+           unsigned int* dest = nullptr;
+           if (!out.is_none()) dest = outBuffer<unsigned int>(target, out, {queries}, "uint32");
            std::vector<unsigned int> found;
            {
              nb::gil_scoped_release released;
@@ -382,10 +399,12 @@ NB_MODULE(meshsearch, m)
              runBatch(objects.size(),
                       [&] { self.nearestObject(objects, found); },
                       [&] (const size_t i) { self.nearestObject(objects[i]); });
+             if (dest != nullptr) std::copy(found.begin(), found.end(), dest);
            }
-           return indexArray(std::move(found));
+           if (dest != nullptr) return out;
+           return nb::cast(indexArray(std::move(found)));
          },
-         "indices"_a.noconvert(),
+         "indices"_a.noconvert(), nb::kw_only(), "out"_a = nb::none(),
          "The object nearest to each object of an array of indices, each\n"
          "excluded from its own answer: a uint32 array with one index per\n"
          "query, in query order.\n\n"
@@ -395,6 +414,13 @@ NB_MODULE(meshsearch, m)
          "wrapped, and an array that is not of integers raises TypeError.\n\n"
          "A large batch is answered in cell order internally, which is faster;\n"
          "the results are always in query order.\n\n"
+         "out, keyword-only, is an array to write the result into instead of\n"
+         "allocating one, and is then returned. It must already be exactly\n"
+         "the result: a writeable, C-contiguous uint32 array of shape\n"
+         "(len(indices),). Nothing is converted: a wrong dtype, a read-only array\n"
+         "or something that is not an array raises TypeError; a wrong shape\n"
+         "or a non-contiguous array raises meshsearch.Error. out is checked\n"
+         "before any query runs, and is not written to if the call raises.\n\n"
          "Raises meshsearch.IndexError, naming the first query that fails, on\n"
          "an index that is out of range or removed, and returns nothing\n"
          "partial; meshsearch.Error if fewer than two objects remain, even\n"

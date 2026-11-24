@@ -43,9 +43,11 @@ include(GNUInstallDirs)
 # compiler and the instruction set, so contraction would make distances, and
 # with them boundary and tie decisions, depend on the platform. Private, so it
 # applies to meshsearch's own translation units and reaches no consumer.
+# -fno-math-errno lets sqrt compile to the instruction, without a libm call
+# kept for errno; results are unchanged.
 set(MESHSEARCH_PRIVATE_OPTIONS "")
 if (NOT MSVC)
-  list(APPEND MESHSEARCH_PRIVATE_OPTIONS -ffp-contract=off)
+  list(APPEND MESHSEARCH_PRIVATE_OPTIONS -ffp-contract=off -fno-math-errno)
 endif()
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
   list(APPEND MESHSEARCH_PRIVATE_OPTIONS -Wall -Wextra)

@@ -30,8 +30,8 @@
   `nearest_objects` and `close_objects`. The indices may be of any integer
   dtype and are not converted: a negative or too large value raises
   `meshsearch.IndexError`.
-- Python: keyword-only `out=` on the batched `nearest_objects` and
-  `count_objects`: a C-contiguous array of exactly the result's dtype and shape,
+- Python: keyword-only `out=` on the batched `nearest_object`,
+  `nearest_objects` and `count_objects`: a C-contiguous array of exactly the result's dtype and shape,
   filled and returned. Any other array is an error, never converted.
 - Examples `examples/example_batch.cpp` and additions to
   `examples/example_batch.py`, and sections of the guide on batches, counts,
@@ -50,6 +50,12 @@
   above the number of objects for `nearest_objects`, invalid radii for
   `close_objects`, an empty grid for `nearest_object` — now raises even when
   the batch is empty.
+
+### Changed (build)
+
+- meshsearch's own translation units, and the Python module, are also compiled
+  with `-fno-math-errno` where `-ffp-contract=off` is set. Results are
+  unchanged.
 
 ### Changed (C++ interface)
 

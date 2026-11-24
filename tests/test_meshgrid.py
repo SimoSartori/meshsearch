@@ -1028,6 +1028,34 @@ def test_out_is_filled_and_returned(grids, batch_queries):
     assert np.array_equal(counts, grid.count_objects(objects, 0.1))
 
 
+def test_nearest_object_out_is_filled_returned_and_checked(grids, batch_queries):
+    qx, qy, qz = batch_queries
+    grid = grids["matched"]
+    objects = np.arange(20)
+
+    out = np.zeros(len(qx), dtype=np.uint32)
+    assert grid.nearest_object(qx, qy, qz, out=out) is out
+    assert np.array_equal(out, grid.nearest_object(qx, qy, qz))
+
+    out = np.zeros(20, dtype=np.uint32)
+    assert grid.nearest_object(objects, out=out) is out
+    assert np.array_equal(out, grid.nearest_object(objects))
+
+    untouched = np.full(len(qx), 7, dtype=np.uint32)
+    for bad in (np.zeros(len(qx), dtype=np.int64), [0] * len(qx)):
+        with pytest.raises(TypeError):
+            grid.nearest_object(qx, qy, qz, out=bad)
+    with pytest.raises(meshsearch.Error):
+        grid.nearest_object(qx, qy, qz, out=np.zeros(len(qx) + 1, dtype=np.uint32))
+    with pytest.raises(meshsearch.Error):
+        grid.nearest_object(qx, qy, qz, out=np.zeros((len(qx), 2), dtype=np.uint32)[:, 0])
+    bad_x = qx.copy()
+    bad_x[3] = 1e9
+    with pytest.raises(meshsearch.Error):
+        grid.nearest_object(bad_x, qy, qz, out=untouched)
+    assert (untouched == 7).all()
+
+
 def test_out_may_be_reused_across_calls(grids, batch_queries):
     qx, qy, qz = batch_queries
     grid = grids["matched"]
