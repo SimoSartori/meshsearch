@@ -143,7 +143,7 @@ if (MESHSEARCH_BUILD_PYTHON)
   find_package(nanobind CONFIG REQUIRED)
 
   # The module is named meshsearch; the target cannot be, the library is.
-  nanobind_add_module(meshsearch_python NB_STATIC python/meshsearch_python.cpp)
+  nanobind_add_module(meshsearch_python NB_STATIC FREE_THREADED python/meshsearch_python.cpp)
   set_target_properties(meshsearch_python PROPERTIES OUTPUT_NAME meshsearch)
   target_link_libraries(meshsearch_python PRIVATE meshsearch)
   target_compile_options(meshsearch_python PRIVATE ${MESHSEARCH_PRIVATE_OPTIONS})

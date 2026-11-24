@@ -7,6 +7,11 @@ two C++ exception types onto Python ones.
 """
 
 import copy
+import os
+import subprocess
+import sys
+import sysconfig
+import threading
 
 import numpy as np
 import pytest
@@ -1214,6 +1219,89 @@ def test_batched_calls_from_several_threads(grids, large_batch):
     for t in threads:
         t.join()
     assert not failures
+
+
+# --------------------------------------------------------------------------
+# free-threaded builds: importing the module must not bring the GIL back, and
+# the guarantee that const members may run concurrently on one grid is then
+# exercised with no GIL to serialise the single-point calls
+
+
+@pytest.mark.skipif(not hasattr(sys, "_is_gil_enabled"), reason="not a CPython with the GIL switch")
+def test_import_leaves_the_gil_disabled_on_free_threaded_builds():
+    if sysconfig.get_config_var("Py_GIL_DISABLED") != 1:
+        pytest.skip("regular build")
+    code = "import sys, meshsearch; sys.exit(1 if sys._is_gil_enabled() else 0)"
+    result = subprocess.run([sys.executable, "-c", code], env={k: v for k, v in os.environ.items() if k != "PYTHON_GIL"},
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def run_threads(work, n_threads=6):
+    barrier = threading.Barrier(n_threads)
+    failures = []
+
+    def target():
+        barrier.wait()
+        try:
+            work()
+        except BaseException as exc:
+            failures.append(exc)
+
+    threads = [threading.Thread(target=target) for _ in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not failures, failures[0]
+
+
+def every_query(grid, qx, qy, qz, objects):
+    """Every query kind, single-point and batched, by point and by index."""
+    nq = 200
+    out = []
+    for i in range(0, nq, 7):
+        x, y, z = float(qx[i]), float(qy[i]), float(qz[i])
+        out += [grid.nearest_object(x, y, z), grid.nearest_objects(4, x, y, z),
+                grid.close_objects(x, y, z, 0.08), grid.close_objects(x, y, z, 0.08, 0.03),
+                grid.count_objects(x, y, z, 0.08), grid.contains(x, y, z)]
+        j = int(objects[i])
+        out += [grid.nearest_object(j), grid.nearest_objects(4, j),
+                grid.close_objects(j, 0.08), grid.count_objects(j, 0.08), grid.is_alive(j)]
+    q = (qx[:nq], qy[:nq], qz[:nq])
+    out += [grid.nearest_object(*q), grid.nearest_objects(4, *q),
+            grid.close_objects(*q, 0.08), grid.close_objects(*q, 0.08, 0.03),
+            grid.count_objects(*q, 0.08), grid.contains(*q),
+            grid.nearest_object(objects[:nq]), grid.nearest_objects(4, objects[:nq]),
+            grid.close_objects(objects[:nq], 0.08), grid.count_objects(objects[:nq], 0.08),
+            grid.is_alive(objects[:nq])]
+    return out
+
+
+def same(a, b):
+    if isinstance(a, tuple):
+        return all(same(u, v) for u, v in zip(a, b))
+    return np.array_equal(a, b)
+
+
+@pytest.mark.parametrize("periodic", [False, (True, False, True), True], ids=["open", "mixed", "periodic"])
+@pytest.mark.parametrize("regime", ["dense", "matched", "sparse"])
+def test_threads_querying_one_grid_get_the_serial_results(points, periodic, regime):
+    size = dict(REGIMES)[regime]
+    X, Y, Z = points
+    grid = meshsearch.MeshGrid(X, Y, Z, size, limits=BOX, periodic=periodic)
+    rng = np.random.default_rng(7)
+    qx, qy, qz = rng.random((3, 200))
+    objects = rng.integers(0, len(X), 200).astype(np.uint32)
+    expected = every_query(grid, qx, qy, qz, objects)
+
+    def work():
+        for _ in range(3):
+            got = every_query(grid, qx, qy, qz, objects)
+            assert len(got) == len(expected)
+            assert all(same(g, e) for g, e in zip(got, expected))
+
+    run_threads(work)
 
 
 def test_a_wide_shell_at_large_rmin():
