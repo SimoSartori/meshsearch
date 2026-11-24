@@ -21,8 +21,10 @@ x, y, z = rng.random(n), rng.random(n), rng.random(n)
 grid = meshsearch.MeshGrid(x, y, z, 4 * n ** (-1 / 3), limits=[[0.0, 1.0]] * 3)
 
 # Query points go in as three arrays, the same shape as the constructor takes.
-# They must be numpy arrays rather than lists: an array argument is what selects
-# the batched overload, and a list would be ambiguous with a single point.
+# Any array-like will do: a float64 or integer array is read as it is, without
+# a copy, and a list or a float32 array is converted by numpy first. What
+# selects the batched form is an argument that has a length, in place of a
+# number.
 queries = rng.random((50_000, 3))
 qx = np.ascontiguousarray(queries[:, 0])
 qy = np.ascontiguousarray(queries[:, 1])
@@ -144,3 +146,15 @@ around = grid.count_objects(objects, radius)
 print(f"\nobject {objects[0]}: nearest other object {partner[0]}, "
       f"{around[0]} objects within {radius}")
 assert np.array_equal(np.diff(ring_offsets), around)
+
+# contains and is_alive answer for a whole array at once, one bool per point or
+# index, and never raise on the values. contains is whether a query at the point
+# would be accepted, that is, whether it lies in the box, so a batch can be
+# screened before it is asked. is_alive is the one member taking an index that
+# does not raise: an index that is negative, out of range or removed is False.
+accepted = grid.contains(bad_x, qy, qz)
+print(f"\n{accepted.sum()} of {len(accepted)} query points lie in the box; "
+      f"query 99 does not: {not accepted[99]}")
+assert accepted.sum() == len(qx) - 1 and not accepted[99]
+alive = grid.is_alive(np.array([0, 1, n - 1, n, -1]))
+assert alive.tolist() == [True, True, True, False, False]

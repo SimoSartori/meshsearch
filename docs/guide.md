@@ -139,8 +139,8 @@ speed, as before the option existed, and returns the same results.
 Every query also comes as a batch, in both languages: over many points, or
 over many objects already in the grid. A batch has the name of the single
 query; what tells them apart is the argument: three vectors (C++) or three
-numpy arrays (Python) in place of three numbers, or a vector or array of
-indices in place of one index. In C++:
+arrays (Python) in place of three numbers, or a vector or array of indices in
+place of one index. In C++:
 
 ```{literalinclude} ../examples/example_batch.cpp
 :language: cpp
@@ -148,9 +148,13 @@ indices in place of one index. In C++:
 :end-at: "printf(\"query 12 has %llu neighbours within %.2f\\n\", (unsigned long long)(last-first), radius);"
 ```
 
-In Python the query points must be numpy arrays rather than lists, because an
-array argument is what selects the batch; a one-element array is still a batch
-and returns a one-element result:
+In Python the query points can be any array-like. What selects the batch is an
+argument that has a length, in place of a number, so a one-element list or
+array is still a batch and returns a one-element result. A float64 or integer
+array is read as it is, without a copy, whatever its strides; anything else,
+such as a list, a tuple or a float32 array, is converted by numpy first, and
+must hold real numbers (`TypeError` otherwise) in one dimension
+(`meshsearch.Error` otherwise):
 
 ```{literalinclude} ../examples/example_batch.py
 :language: python
@@ -186,12 +190,14 @@ own answer, as in the single index query. In C++ the indices are a
 :end-at: "(unsigned long long)around[0], (unsigned long long)around[1], (unsigned long long)around[2]);"
 ```
 
-In Python they are a one-dimensional array of any integer dtype: the `uint32`
-arrays the queries return, or numpy's default `int64`. The array is read as it
-is, never converted, so an index cannot wrap round to another object: a
-negative value, one too large to be an index, or a removed object raises
-`meshsearch.IndexError`, naming the query. An array that is not of integers
-raises `TypeError`.
+In Python they are a one-dimensional array-like of integers: the `uint32`
+arrays the queries return, numpy's default `int64`, or a list. An integer
+array of any dtype is read as it is, never converted, so an index cannot wrap
+round to another object: a negative value, one too large to be an index, or a
+removed object raises `meshsearch.IndexError`, naming the query. Anything that
+is not integers raises `TypeError`. The same holds for a single index: `-1` is
+not the last object but an index out of range, and raises
+`meshsearch.IndexError`. A negative `n` raises `meshsearch.Error`.
 
 ```{literalinclude} ../examples/example_batch.py
 :language: python
@@ -221,7 +227,9 @@ more entry than there are queries, starting at 0 and ending at the number of
 indices. The results of query `i` run from `offsets[i]` up to, excluding,
 `offsets[i+1]`; a query that found nothing has two equal offsets, never a
 missing entry. In C++ the two arrays are the members `indices` and `offsets` of
-a `MeshGrid::Batch`; in Python `close_objects` returns them as a tuple. The
+a `MeshGrid::Batch`; in Python `close_objects` returns them as a named tuple,
+`meshsearch.Batch`, with the fields `indices` and `offsets`, which also unpacks
+like a plain pair. The
 offsets are 64-bit, because a batch can find more results in total than 32 bits
 can count: `std::uint64_t` in C++, and `int64` in Python, numpy's standard
 integer, which indexes, slices and repeats without a cast.
@@ -269,6 +277,52 @@ array in Python, in input order; a single count is a `std::size_t` or a Python
 :end-at: "within = grid.count_objects(qx, qy, qz, radius)"
 ```
 
+## Testing points and indices
+
+`contains(X, Y, Z)` says whether a query at the point would be accepted, that
+is, whether the point lies in the box: the very test every member taking a point
+applies, so a point for which it is false is one on which they raise `Error`.
+It is false for a NaN coordinate, and never raises. `isAlive(index)` (`is_alive`
+in Python) is the one member taking an index that does not raise: an index that
+is out of range or removed answers false, a negative one included in Python.
+Both have a batch, returning one flag per entry: a `std::vector<std::uint8_t>`
+holding 0 or 1 in C++, a `bool` array in Python, and both have the container
+form in C++ and `out=` in Python. Use them to screen a batch before asking it,
+instead of catching the error it raises.
+
+```{literalinclude} ../examples/example_batch.py
+:language: python
+:start-at: "accepted = grid.contains(bad_x, qy, qz)"
+:end-at: "assert alive.tolist() == [True, True, True, False, False]"
+```
+
+```{literalinclude} ../examples/example_batch.cpp
+:language: cpp
+:start-at: "std::vector<double> screened = QX;"
+:end-at: "accepted[99], alive[0], alive[1], alive[2]);"
+```
+
+## Copies
+
+A `MeshGrid` is copied by its copy constructor and assignment, which are deep:
+the copy shares no storage with the original apart from a table that depends
+only on the geometry and is never modified, and answers every query as the
+original does, the order of the objects within a cell included. In Python
+`copy.copy(grid)` and `copy.deepcopy(grid)` do the same. Moves transfer the
+storage without copying it, and leave the source grid fit only to be destroyed
+or assigned to.
+
+Grids are not serializable, and a Python `MeshGrid` cannot be pickled. For
+parallel work use threads, which share one grid, or rebuild the grid in each
+process from the coordinates, which is fast.
+
+## The version
+
+`meshsearch.__version__` in Python and `MESHSEARCH_VERSION` in
+`meshsearch/Version.h`, with `MESHSEARCH_VERSION_MAJOR`, `_MINOR` and `_PATCH`,
+are the version the library was built as. Both come from the project version in
+`CMakeLists.txt`, the one place it is written for them.
+
 ## Reusing a container in C++
 
 Each C++ query that returns a container also has a form that writes into one
@@ -293,12 +347,13 @@ the answers. If the call throws, the container's content is unspecified.
 
 ## Reusing an array in Python
 
-Python returns new arrays, but three batches have a result whose shape is known
+Python returns new arrays, but some batches have a result whose shape is known
 before they run, and accept an array to write into instead, through the
 keyword-only argument `out=`: the batched `nearest_object`, whose result is
 `(n_query,)`, the batched `nearest_objects`, whose result is `(n_query, n)`,
 and the batched `count_objects`, whose result is `(n_query,)`, over points or
-over objects alike. The call fills the array and returns it.
+over objects alike, and the batched `contains` and `is_alive`, whose result is
+`(n_query,)`. The call fills the array and returns it.
 
 ```{literalinclude} ../examples/example_batch.py
 :language: python
@@ -307,7 +362,8 @@ over objects alike. The call fills the array and returns it.
 ```
 
 The array must already be exactly the result: `uint32` for the indices of
-`nearest_object` and `nearest_objects` and `int64` for counts, of the exact shape, C-contiguous and
+`nearest_object` and `nearest_objects`, `int64` for counts and `bool` for
+`contains` and `is_alive`, of the exact shape, C-contiguous and
 writeable. Anything else is an error, never a silent conversion, since a
 converted copy would be a different array and the one passed in would stay
 unwritten. A wrong dtype, a read-only array, or something that is not an array
