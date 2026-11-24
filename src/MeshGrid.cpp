@@ -680,6 +680,276 @@ std::array<bool, 3> meshsearch::MeshGrid::get_periodic () const
 // ===========================================================================
 
 
+template <class Threshold, class Visit>
+void meshsearch::MeshGrid::walkPeriodic (const std::array<unsigned int, 3>& target,
+                                         const double X, const double Y, const double Z, const double Rmin,
+                                         Threshold&& threshold, Visit&& visit) const
+{
+  const CellFaces faces = periodicFaces(m_lims, m_nCells, m_cellsize, m_periodic, m_omega);
+
+  std::int64_t cells[3], where[3];
+  double period[3], half[3];
+  for (int a=0; a<3; ++a) {
+    cells[a] = m_nCells[a];
+    where[a] = target[a];
+    period[a] = m_periodic[a] ? m_period[a] : 0.;
+    half[a] = m_periodic[a] ? m_period[a]*0.5 : std::numeric_limits<double>::infinity();
+  }
+
+  const unsigned int nShells = static_cast<unsigned int>(m_mask->size());
+
+  unsigned int firstShellIndex = 0;
+  const double Rmin_sq = Rmin*Rmin;
+  if (Rmin_sq >= tiny_sq) {
+    CellFaces start = faces;
+    for (int a=0; a<3; ++a)
+      if (m_periodic[a]) start.pad[a] = 2.*m_slack_axis[a];
+    firstShellIndex = firstShell(start, nShells, Rmin, Rmin_sq);
+  }
+
+  for (unsigned int maskInd=firstShellIndex; maskInd<nShells; ++maskInd) {
+    if (shellBeyondPeriodic(maskInd, m_cellsize, m_slack, threshold())) break;
+
+    for (const auto& offset : (*m_mask)[maskInd]) {
+      const std::int64_t step[3] = {offset.i, offset.j, offset.k};
+      std::int64_t unwrapped[3], cell[3];
+      double shift[3];
+      bool inside = true, end = false, wrapped = false;
+
+      for (int a=0; a<3; ++a) {
+        const std::int64_t u = where[a]+step[a];
+        unwrapped[a] = u;
+        shift[a] = 0.;
+        if (!m_periodic[a]) {
+          if (u < 0 || u >= cells[a]) { inside = false; break; }
+          cell[a] = u;
+          continue;
+        }
+        if (u < 0) { cell[a] = u+cells[a]; shift[a] = period[a]; wrapped = true; }
+        else if (u >= cells[a]) { cell[a] = u-cells[a]; shift[a] = -period[a]; wrapped = true; }
+        else cell[a] = u;
+        if (2*step[a] >= cells[a]-2 || -2*step[a] >= cells[a]-2) end = true;
+      }
+      if (!inside) continue;
+
+      const CellBlock& block = m_cells[getLinearIndex(static_cast<unsigned int>(cell[0]), static_cast<unsigned int>(cell[1]), static_cast<unsigned int>(cell[2]))];
+      if (block.count == 0) continue;
+      const size_t first = block.start;
+      const double* x = m_X.data()+first;
+      const double* y = m_Y.data()+first;
+      const double* z = m_Z.data()+first;
+      auto visitSlot = [&] (const size_t k, const double dist_sq) { visit(first, k, dist_sq); };
+
+      if (end) {
+        scanImages(x, y, z, block.count, X, Y, Z, period, half, visitSlot);
+        continue;
+      }
+      if (cellBeyond(faces, unwrapped[0], unwrapped[1], unwrapped[2], X, Y, Z, threshold())) continue;
+      if (wrapped) scanShifted(x, y, z, block.count, X, Y, Z, shift[0], shift[1], shift[2], visitSlot);
+      else scanBlock(x, y, z, block.count, X, Y, Z, visitSlot);
+    }
+  }
+}
+
+
+// ===========================================================================
+
+
+unsigned int meshsearch::MeshGrid::nearestObjectPeriodic (double X, double Y, double Z, const unsigned int* index) const
+{
+  size_t self = no_slot;
+  if (index) {
+    checkIndex(m_alive, *index);
+    if (m_nObjects < 2) throw Error("no other object remains in the grid");
+    self = m_toInternal[*index];
+    X = m_X[self];
+    Y = m_Y[self];
+    Z = m_Z[self];
+  }
+  const auto target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
+  if (!index && m_nObjects == 0) throw Error("the grid holds no objects");
+
+  double min_dist_sq = std::numeric_limits<double>::max();
+  size_t finalSlot = no_slot;
+
+  walkPeriodic(target, X, Y, Z, 0., [&] { return min_dist_sq; },
+               [&] (const size_t first, const size_t k, const double dist_sq) {
+                 if (first+k == self) return;
+                 if (finalSlot == no_slot || dist_sq < min_dist_sq) {
+                   min_dist_sq = dist_sq;
+                   finalSlot = first+k;
+                 }
+               });
+
+  if (finalSlot == no_slot)
+    throw Error("no object found");
+
+  return m_toPublic[finalSlot];
+}
+
+
+// ===========================================================================
+
+
+void meshsearch::MeshGrid::nearestObjectsPeriodic (std::vector<unsigned int>& out, const unsigned int N,
+                                                    double X, double Y, double Z,
+                                                    const unsigned int* index) const
+{
+  size_t self = no_slot;
+  if (index) {
+    checkIndex(m_alive, *index);
+    if (N >= m_nObjects) throw Error("N is larger than the number of available neighbours");
+    if (N == 0) {
+      out.clear();
+      return;
+    }
+    self = m_toInternal[*index];
+    X = m_X[self];
+    Y = m_Y[self];
+    Z = m_Z[self];
+  }
+  const auto target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
+  if (!index) {
+    if (N > m_nObjects) throw Error("N is larger than the number of objects");
+  }
+  out.clear();
+  if (N == 0) return;
+
+  auto walk = [&] (auto& pq)
+  {
+    walkPeriodic(target, X, Y, Z, 0., [&] { return pq.T; },
+                 [&] (const size_t first, const size_t k, const double dist_sq) {
+                   if (first+k != self && dist_sq <= pq.T) pq.offer(dist_sq, m_toPublic[first+k]);
+                 });
+  };
+
+  if (N <= sorted_limit) {
+    SortedKeep pq(N);
+    walk(pq);
+    pq.finish(out);
+  }
+  else {
+    BufferKeep pq(N);
+    walk(pq);
+    pq.finish(out);
+  }
+}
+
+
+// ===========================================================================
+
+
+void meshsearch::MeshGrid::closeObjectsPeriodic (std::vector<unsigned int>& out,
+                                                  double X, double Y, double Z,
+                                                  const double Rmax, const double Rmin,
+                                                  const unsigned int* index) const
+{
+  size_t self = no_slot;
+  std::array<unsigned int, 3> target;
+  if (index) {
+    checkIndex(m_alive, *index);
+    checkRadii(Rmax, Rmin);
+    self = m_toInternal[*index];
+    X = m_X[self];
+    Y = m_Y[self];
+    Z = m_Z[self];
+    target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
+  }
+  else {
+    target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
+    checkRadii(Rmax, Rmin);
+  }
+
+  const double Rmax_sq = Rmax*Rmax;
+  const double Rmin_sq = Rmin*Rmin;
+
+  std::vector<unsigned int> found;
+  found.swap(out);
+  found.clear();
+
+  walkPeriodic(target, X, Y, Z, Rmin, [&] { return Rmax_sq; },
+               [&] (const size_t first, const size_t k, const double dist_sq) {
+                 if (first+k != self && dist_sq <= Rmax_sq && dist_sq >= Rmin_sq) found.push_back(m_toPublic[first+k]);
+               });
+
+  out.swap(found);
+}
+
+
+// ===========================================================================
+
+
+template <class Threshold, class Visit>
+void meshsearch::MeshGrid::walk (const std::array<unsigned int, 3>& target,
+                                 const double X, const double Y, const double Z, const double Rmin,
+                                 Threshold&& threshold, Visit&& visit) const
+{
+  if (m_periodic_any) walkPeriodic(target, X, Y, Z, Rmin, threshold, visit);
+  else walkPlain(target, X, Y, Z, Rmin, threshold, visit);
+}
+
+
+// ===========================================================================
+
+
+template <class Threshold, class Visit>
+void meshsearch::MeshGrid::walkPlain (const std::array<unsigned int, 3>& target,
+                                      const double X, const double Y, const double Z, const double Rmin,
+                                      Threshold&& threshold, Visit&& visit) const
+{
+  const int targetX = static_cast<int>(target[0]);
+  const int targetY = static_cast<int>(target[1]);
+  const int targetZ = static_cast<int>(target[2]);
+
+  const int nCx = static_cast<int>(m_nCells[0]);
+  const int nCy = static_cast<int>(m_nCells[1]);
+  const int nCz = static_cast<int>(m_nCells[2]);
+
+  const CellFaces faces = cellFaces(m_lims, m_nCells, m_cellsize);
+
+  const unsigned int nShells = static_cast<unsigned int>(m_mask->size());
+  const unsigned int min_mask_idx = firstShell(faces, nShells, Rmin, Rmin*Rmin);
+
+  for (unsigned int maskInd=min_mask_idx; maskInd<nShells; maskInd++) {
+    if (shellBeyond(maskInd, m_cellsize, threshold())) break;
+
+    for (const auto& offset : (*m_mask)[maskInd]) {
+      const std::int64_t currX = std::int64_t(targetX)+offset.i;
+      const std::int64_t currY = std::int64_t(targetY)+offset.j;
+      const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
+      if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
+        const CellBlock& block = m_cells[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
+        if (block.count == 0 || cellBeyond(faces, currX, currY, currZ, X, Y, Z, threshold())) continue;
+        const size_t first = block.start;
+        scanBlock(m_X.data()+first, m_Y.data()+first, m_Z.data()+first, block.count, X, Y, Z,
+                  [&] (const size_t k, const double dist_sq) { visit(first, k, dist_sq); });
+      }
+    }
+  }
+}
+
+
+// ===========================================================================
+
+
+template <bool Exclude, class Sink>
+void meshsearch::MeshGrid::closeScan (const std::array<unsigned int, 3>& target,
+                                      const double X, const double Y, const double Z, const size_t self,
+                                      const double Rmax, const double Rmin, Sink&& sink) const
+{
+  const double Rmax_sq = Rmax*Rmax;
+  const double Rmin_sq = Rmin*Rmin;
+
+  walk(target, X, Y, Z, Rmin, [&] { return Rmax_sq; },
+       [&] (const size_t first, const size_t k, const double dist_sq) {
+         if ((!Exclude || first+k != self) && dist_sq <= Rmax_sq && dist_sq >= Rmin_sq) sink(m_toPublic[first+k]);
+       });
+}
+
+
+// ===========================================================================
+
+
 unsigned int meshsearch::MeshGrid::nearestObject (const double X, const double Y, const double Z) const
 {
   if (m_periodic_any) return nearestObjectPeriodic(X, Y, Z, nullptr);
@@ -798,11 +1068,36 @@ unsigned int meshsearch::MeshGrid::nearestObject (const unsigned int index) cons
 std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned int N,
                                                                 const double X, const double Y, const double Z) const
 {
-  if (m_periodic_any) return nearestObjectsPeriodic(N, X, Y, Z, nullptr);
+  std::vector<unsigned int> out;
+  nearestObjects(N, X, Y, Z, out);
+  return out;
+}
+
+
+// ===========================================================================
+
+
+std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned int N,
+                                                                const unsigned int index) const
+{
+  std::vector<unsigned int> out;
+  nearestObjects(N, index, out);
+  return out;
+}
+
+
+// ===========================================================================
+
+
+void meshsearch::MeshGrid::nearestObjects (const unsigned int N, const double X, const double Y, const double Z,
+                                           std::vector<unsigned int>& out) const
+{
+  if (m_periodic_any) return nearestObjectsPeriodic(out, N, X, Y, Z, nullptr);
 
   const auto target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
   if (N > m_nObjects) throw Error("N is larger than the number of objects");
-  if (N == 0) return {};
+  out.clear();
+  if (N == 0) return;
 
   const int targetX = static_cast<int>(target[0]);
   const int targetY = static_cast<int>(target[1]);
@@ -840,33 +1135,31 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
     }
   };
 
-  std::vector<unsigned int> finalInd;
   if (N <= sorted_limit) {
     SortedKeep pq(N);
     walk(pq);
-    pq.finish(finalInd);
+    pq.finish(out);
   }
   else {
     BufferKeep pq(N);
     walk(pq);
-    pq.finish(finalInd);
+    pq.finish(out);
   }
-
-  return finalInd;
 }
 
 
 // ===========================================================================
 
 
-std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned int N,
-                                                                const unsigned int index) const
+void meshsearch::MeshGrid::nearestObjects (const unsigned int N, const unsigned int index,
+                                           std::vector<unsigned int>& out) const
 {
-  if (m_periodic_any) return nearestObjectsPeriodic(N, 0., 0., 0., &index);
+  if (m_periodic_any) return nearestObjectsPeriodic(out, N, 0., 0., 0., &index);
 
   checkIndex(m_alive, index);
   if (N >= m_nObjects) throw Error("N is larger than the number of available neighbours");
-  if (N == 0) return {};
+  out.clear();
+  if (N == 0) return;
 
   const size_t self = m_toInternal[index];
   const double X = m_X[self];
@@ -910,19 +1203,16 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
     }
   };
 
-  std::vector<unsigned int> finalInd;
   if (N <= sorted_limit) {
     SortedKeep pq(N);
     walk(pq);
-    pq.finish(finalInd);
+    pq.finish(out);
   }
   else {
     BufferKeep pq(N);
     walk(pq);
-    pq.finish(finalInd);
+    pq.finish(out);
   }
-
-  return finalInd;
 }
 
 
@@ -932,7 +1222,32 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
 std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const double X, const double Y, const double Z,
                                                               const double Rmax, const double Rmin) const
 {
-  if (m_periodic_any) return closeObjectsPeriodic(X, Y, Z, Rmax, Rmin, nullptr);
+  std::vector<unsigned int> out;
+  closeObjects(X, Y, Z, Rmax, Rmin, out);
+  return out;
+}
+
+
+// ===========================================================================
+
+
+std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const unsigned int index,
+                                                              const double Rmax, const double Rmin) const
+{
+  std::vector<unsigned int> out;
+  closeObjects(index, Rmax, Rmin, out);
+  return out;
+}
+
+
+// ===========================================================================
+
+
+void meshsearch::MeshGrid::closeObjects (const double X, const double Y, const double Z,
+                                         const double Rmax, const double Rmin,
+                                         std::vector<unsigned int>& out) const
+{
+  if (m_periodic_any) return closeObjectsPeriodic(out, X, Y, Z, Rmax, Rmin, nullptr);
 
   const auto target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
   checkRadii(Rmax, Rmin);
@@ -953,7 +1268,9 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const double X, co
   const unsigned int nShells = static_cast<unsigned int>(m_mask->size());
   const unsigned int min_mask_idx = firstShell(faces, nShells, Rmin, Rmin_sq);
 
-  std::vector<unsigned int> finalInd;
+  std::vector<unsigned int> found;
+  found.swap(out);
+  found.clear();
 
   for (unsigned int maskInd=min_mask_idx; maskInd<nShells; maskInd++) {
     if (shellBeyond(maskInd, m_cellsize, Rmax_sq)) break;
@@ -969,23 +1286,33 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const double X, co
         const unsigned int* pub = m_toPublic.data()+first;
         scanBlock(m_X.data()+first, m_Y.data()+first, m_Z.data()+first, block.count, X, Y, Z,
                   [&] (const size_t k, const double dist_sq) {
-                    if (dist_sq <= Rmax_sq && dist_sq >= Rmin_sq) finalInd.push_back(pub[k]);
+                    if (dist_sq <= Rmax_sq && dist_sq >= Rmin_sq) found.push_back(pub[k]);
                   });
       }
     }
   }
 
-  return finalInd;
+  out.swap(found);
 }
 
 
 // ===========================================================================
 
 
-std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const unsigned int index,
-                                                              const double Rmax, const double Rmin) const
+void meshsearch::MeshGrid::closeObjects (const double X, const double Y, const double Z, const double Rmax,
+                                         std::vector<unsigned int>& out) const
 {
-  if (m_periodic_any) return closeObjectsPeriodic(0., 0., 0., Rmax, Rmin, &index);
+  closeObjects(X, Y, Z, Rmax, 0., out);
+}
+
+
+// ===========================================================================
+
+
+void meshsearch::MeshGrid::closeObjects (const unsigned int index, const double Rmax, const double Rmin,
+                                         std::vector<unsigned int>& out) const
+{
+  if (m_periodic_any) return closeObjectsPeriodic(out, 0., 0., 0., Rmax, Rmin, &index);
 
   checkIndex(m_alive, index);
   checkRadii(Rmax, Rmin);
@@ -1012,7 +1339,9 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const unsigned int
   const unsigned int nShells = static_cast<unsigned int>(m_mask->size());
   const unsigned int min_mask_idx = firstShell(faces, nShells, Rmin, Rmin_sq);
 
-  std::vector<unsigned int> finalInd;
+  std::vector<unsigned int> found;
+  found.swap(out);
+  found.clear();
 
   for (unsigned int maskInd=min_mask_idx; maskInd<nShells; maskInd++) {
     if (shellBeyond(maskInd, m_cellsize, Rmax_sq)) break;
@@ -1028,208 +1357,60 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const unsigned int
         const unsigned int* pub = m_toPublic.data()+first;
         scanBlock(m_X.data()+first, m_Y.data()+first, m_Z.data()+first, block.count, X, Y, Z,
                   [&] (const size_t k, const double dist_sq) {
-                    if (first+k != self && dist_sq <= Rmax_sq && dist_sq >= Rmin_sq) finalInd.push_back(pub[k]);
+                    if (first+k != self && dist_sq <= Rmax_sq && dist_sq >= Rmin_sq) found.push_back(pub[k]);
                   });
       }
     }
   }
 
-  return finalInd;
+  out.swap(found);
 }
 
 
 // ===========================================================================
 
 
-template <class Threshold, class Visit>
-void meshsearch::MeshGrid::walkPeriodic (const std::array<unsigned int, 3>& target,
-                                         const double X, const double Y, const double Z, const double Rmin,
-                                         Threshold&& threshold, Visit&& visit) const
+void meshsearch::MeshGrid::closeObjects (const unsigned int index, const double Rmax,
+                                         std::vector<unsigned int>& out) const
 {
-  const CellFaces faces = periodicFaces(m_lims, m_nCells, m_cellsize, m_periodic, m_omega);
-
-  std::int64_t cells[3], where[3];
-  double period[3], half[3];
-  for (int a=0; a<3; ++a) {
-    cells[a] = m_nCells[a];
-    where[a] = target[a];
-    period[a] = m_periodic[a] ? m_period[a] : 0.;
-    half[a] = m_periodic[a] ? m_period[a]*0.5 : std::numeric_limits<double>::infinity();
-  }
-
-  const unsigned int nShells = static_cast<unsigned int>(m_mask->size());
-
-  unsigned int firstShellIndex = 0;
-  const double Rmin_sq = Rmin*Rmin;
-  if (Rmin_sq >= tiny_sq) {
-    CellFaces start = faces;
-    for (int a=0; a<3; ++a)
-      if (m_periodic[a]) start.pad[a] = 2.*m_slack_axis[a];
-    firstShellIndex = firstShell(start, nShells, Rmin, Rmin_sq);
-  }
-
-  for (unsigned int maskInd=firstShellIndex; maskInd<nShells; ++maskInd) {
-    if (shellBeyondPeriodic(maskInd, m_cellsize, m_slack, threshold())) break;
-
-    for (const auto& offset : (*m_mask)[maskInd]) {
-      const std::int64_t step[3] = {offset.i, offset.j, offset.k};
-      std::int64_t unwrapped[3], cell[3];
-      double shift[3];
-      bool inside = true, end = false, wrapped = false;
-
-      for (int a=0; a<3; ++a) {
-        const std::int64_t u = where[a]+step[a];
-        unwrapped[a] = u;
-        shift[a] = 0.;
-        if (!m_periodic[a]) {
-          if (u < 0 || u >= cells[a]) { inside = false; break; }
-          cell[a] = u;
-          continue;
-        }
-        if (u < 0) { cell[a] = u+cells[a]; shift[a] = period[a]; wrapped = true; }
-        else if (u >= cells[a]) { cell[a] = u-cells[a]; shift[a] = -period[a]; wrapped = true; }
-        else cell[a] = u;
-        if (2*step[a] >= cells[a]-2 || -2*step[a] >= cells[a]-2) end = true;
-      }
-      if (!inside) continue;
-
-      const CellBlock& block = m_cells[getLinearIndex(static_cast<unsigned int>(cell[0]), static_cast<unsigned int>(cell[1]), static_cast<unsigned int>(cell[2]))];
-      if (block.count == 0) continue;
-      const size_t first = block.start;
-      const double* x = m_X.data()+first;
-      const double* y = m_Y.data()+first;
-      const double* z = m_Z.data()+first;
-      auto visitSlot = [&] (const size_t k, const double dist_sq) { visit(first, k, dist_sq); };
-
-      if (end) {
-        scanImages(x, y, z, block.count, X, Y, Z, period, half, visitSlot);
-        continue;
-      }
-      if (cellBeyond(faces, unwrapped[0], unwrapped[1], unwrapped[2], X, Y, Z, threshold())) continue;
-      if (wrapped) scanShifted(x, y, z, block.count, X, Y, Z, shift[0], shift[1], shift[2], visitSlot);
-      else scanBlock(x, y, z, block.count, X, Y, Z, visitSlot);
-    }
-  }
+  closeObjects(index, Rmax, 0., out);
 }
 
 
 // ===========================================================================
 
 
-unsigned int meshsearch::MeshGrid::nearestObjectPeriodic (double X, double Y, double Z, const unsigned int* index) const
+std::size_t meshsearch::MeshGrid::countObjects (const double X, const double Y, const double Z,
+                                                const double Rmax, const double Rmin) const
 {
-  size_t self = no_slot;
-  if (index) {
-    checkIndex(m_alive, *index);
-    if (m_nObjects < 2) throw Error("no other object remains in the grid");
-    self = m_toInternal[*index];
-    X = m_X[self];
-    Y = m_Y[self];
-    Z = m_Z[self];
-  }
   const auto target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
-  if (!index && m_nObjects == 0) throw Error("the grid holds no objects");
+  checkRadii(Rmax, Rmin);
 
-  double min_dist_sq = std::numeric_limits<double>::max();
-  size_t finalSlot = no_slot;
-
-  walkPeriodic(target, X, Y, Z, 0., [&] { return min_dist_sq; },
-               [&] (const size_t first, const size_t k, const double dist_sq) {
-                 if (first+k == self) return;
-                 if (finalSlot == no_slot || dist_sq < min_dist_sq) {
-                   min_dist_sq = dist_sq;
-                   finalSlot = first+k;
-                 }
-               });
-
-  if (finalSlot == no_slot)
-    throw Error("no object found");
-
-  return m_toPublic[finalSlot];
+  std::size_t count = 0;
+  closeScan<false>(target, X, Y, Z, no_slot, Rmax, Rmin, [&] (const unsigned int) { ++count; });
+  return count;
 }
 
 
 // ===========================================================================
 
 
-std::vector<unsigned int> meshsearch::MeshGrid::nearestObjectsPeriodic (const unsigned int N,
-                                                                        double X, double Y, double Z,
-                                                                        const unsigned int* index) const
+std::size_t meshsearch::MeshGrid::countObjects (const unsigned int index,
+                                                const double Rmax, const double Rmin) const
 {
-  size_t self = no_slot;
-  if (index) {
-    checkIndex(m_alive, *index);
-    if (N >= m_nObjects) throw Error("N is larger than the number of available neighbours");
-    if (N == 0) return {};
-    self = m_toInternal[*index];
-    X = m_X[self];
-    Y = m_Y[self];
-    Z = m_Z[self];
-  }
+  checkIndex(m_alive, index);
+  checkRadii(Rmax, Rmin);
+
+  const size_t self = m_toInternal[index];
+  const double X = m_X[self];
+  const double Y = m_Y[self];
+  const double Z = m_Z[self];
+
   const auto target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
-  if (!index) {
-    if (N > m_nObjects) throw Error("N is larger than the number of objects");
-    if (N == 0) return {};
-  }
 
-  auto walk = [&] (auto& pq)
-  {
-    walkPeriodic(target, X, Y, Z, 0., [&] { return pq.T; },
-                 [&] (const size_t first, const size_t k, const double dist_sq) {
-                   if (first+k != self && dist_sq <= pq.T) pq.offer(dist_sq, m_toPublic[first+k]);
-                 });
-  };
-
-  std::vector<unsigned int> finalInd;
-  if (N <= sorted_limit) {
-    SortedKeep pq(N);
-    walk(pq);
-    pq.finish(finalInd);
-  }
-  else {
-    BufferKeep pq(N);
-    walk(pq);
-    pq.finish(finalInd);
-  }
-
-  return finalInd;
-}
-
-
-// ===========================================================================
-
-
-std::vector<unsigned int> meshsearch::MeshGrid::closeObjectsPeriodic (double X, double Y, double Z,
-                                                                      const double Rmax, const double Rmin,
-                                                                      const unsigned int* index) const
-{
-  size_t self = no_slot;
-  std::array<unsigned int, 3> target;
-  if (index) {
-    checkIndex(m_alive, *index);
-    checkRadii(Rmax, Rmin);
-    self = m_toInternal[*index];
-    X = m_X[self];
-    Y = m_Y[self];
-    Z = m_Z[self];
-    target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
-  }
-  else {
-    target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
-    checkRadii(Rmax, Rmin);
-  }
-
-  const double Rmax_sq = Rmax*Rmax;
-  const double Rmin_sq = Rmin*Rmin;
-
-  std::vector<unsigned int> finalInd;
-
-  walkPeriodic(target, X, Y, Z, Rmin, [&] { return Rmax_sq; },
-               [&] (const size_t first, const size_t k, const double dist_sq) {
-                 if (first+k != self && dist_sq <= Rmax_sq && dist_sq >= Rmin_sq) finalInd.push_back(m_toPublic[first+k]);
-               });
-
-  return finalInd;
+  std::size_t count = 0;
+  closeScan<true>(target, X, Y, Z, self, Rmax, Rmin, [&] (const unsigned int) { ++count; });
+  return count;
 }
 
 
