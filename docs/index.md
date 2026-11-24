@@ -7,9 +7,9 @@ Python module built on the same code.
 
 The two APIs are one library with two spellings. Everything the C++ class does,
 the Python module does under a snake_case name, with numpy arrays in place of
-vectors; the only thing that exists on one side alone is the batched query form,
-which Python has and C++ does not need. [Names side by side](naming.md) maps
-them one to one.
+vectors. Both answer queries one at a time or in batches; C++ can also write
+results into containers the caller reuses, and Python into arrays passed as
+`out=`. [Names side by side](naming.md) maps them one to one.
 
 ## Install
 

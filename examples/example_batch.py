@@ -1,9 +1,10 @@
-"""The batched queries, which exist only in the Python bindings.
+"""Batched queries: many query points answered in one call.
 
 Crossing the Python boundary costs a few microseconds per call, which is real
 work when the query itself takes one or two. The batched forms hand the whole
-array of query points across once. A C++ caller writes a loop and pays nothing,
-which is why there is no batched API in the C++ library.
+array of query points across once, and a large batch is answered in an order
+that follows the grid's cells, which is faster again. Results always come back
+in query order.
 
     pip install .
     python examples/example_batch.py
@@ -45,11 +46,17 @@ print(f"nearest_objects -> {five.dtype} {five.shape}")
 print(f"  the fifth-nearest is further than the first for every query: "
       f"{bool(np.all(np.sqrt((x[five[:, 4]] - qx) ** 2 + (y[five[:, 4]] - qy) ** 2 + (z[five[:, 4]] - qz) ** 2) >= separation))}")
 
-# 3. A shell around each query point. The count varies per query, so the result
+# 3. Only the number of objects within a radius of each query point. No index
+#    is collected, so this is cheaper than close_objects when the counts are
+#    all that is needed. Counts are int64.
+radius = 0.02
+within = grid.count_objects(qx, qy, qz, radius)
+print(f"count_objects -> {within.dtype} {within.shape}, mean {within.mean():.2f}")
+
+# 4. A shell around each query point. The count varies per query, so the result
 #    cannot be rectangular. It comes back in compressed-row form: one flat
 #    array of every result, and an offsets array saying where each query's
 #    results begin and end.
-radius = 0.02
 indices, offsets = grid.close_objects(qx, qy, qz, radius)
 print(f"close_objects -> indices {indices.dtype} {indices.shape}, "
       f"offsets {offsets.dtype} {offsets.shape}")
@@ -59,8 +66,10 @@ i = 12
 print(f"  query {i} has {offsets[i + 1] - offsets[i]} neighbours: "
       f"{indices[offsets[i]:offsets[i + 1]]}")
 
-# The per-query count is a difference of offsets -- no loop, no unpacking.
+# The per-query count is a difference of offsets -- no loop, no unpacking --
+# and it is what count_objects returned.
 counts = np.diff(offsets)
+assert np.array_equal(counts, within)
 print(f"  neighbours per query: min {counts.min()}, mean {counts.mean():.2f}, "
       f"max {counts.max()}, total {len(indices)}")
 print(f"  queries with no neighbour at all: {int(np.sum(counts == 0))}")
@@ -94,6 +103,24 @@ busiest = np.bincount(indices, minlength=n).argmax()
 print(f"  object {busiest} is a neighbour of "
       f"{int(np.sum(indices == busiest))} different queries")
 
+# Repeated batches of the same shape can write into one array instead of
+# allocating a new one each time: pass it as out=, and the call fills it and
+# returns it. The array must already be exactly the result -- uint32 of shape
+# (n_query, n) for nearest_objects, int64 of shape (n_query,) for
+# count_objects, C-contiguous -- or the call raises; it is never converted.
+# close_objects has no out=, because its length is only known afterwards.
+neighbours = np.empty((len(qx), 5), dtype=np.uint32)
+tally = np.empty(len(qx), dtype=np.int64)
+for r in (0.01, 0.02, 0.04):
+    grid.count_objects(qx, qy, qz, r, out=tally)
+    print(f"  within {r}: {int(tally.sum())} neighbours over all queries")
+grid.nearest_objects(5, qx, qy, qz, out=neighbours)
+assert np.array_equal(neighbours, five)
+
+# The GIL is released while a batch runs, so other threads can work, including
+# other queries on the same grid. None may modify the grid (add_object,
+# remove_object) until the batch has returned.
+
 # Errors name the query that failed, and nothing partial is returned.
 bad_x = qx.copy()
 bad_x[99] = 5.0
@@ -102,6 +129,15 @@ try:
 except meshsearch.Error as e:
     print(f"\na query point outside the box raised Error: {e}")
 
-# The index-taking overloads have no batched form: their input is a single
-# index, so there is no per-call array to amortise anything over.
-print(f"five nearest to object {nearest[0]}: {grid.nearest_objects(5, int(nearest[0]))}")
+# Every query also has a batch over objects already in the grid: an array of
+# indices in place of the three coordinate arrays. Each object is excluded from
+# its own answer. Any integer dtype is accepted, such as the uint32 the queries
+# return or numpy's default int64, and an index that is negative, too large or
+# removed raises IndexError naming the query, rather than being wrapped.
+objects = nearest[:1000]
+partner = grid.nearest_object(objects)
+ring, ring_offsets = grid.close_objects(objects, radius)
+around = grid.count_objects(objects, radius)
+print(f"\nobject {objects[0]}: nearest other object {partner[0]}, "
+      f"{around[0]} objects within {radius}")
+assert np.array_equal(np.diff(ring_offsets), around)

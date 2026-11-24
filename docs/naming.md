@@ -19,6 +19,17 @@ and returns numpy arrays where C++ returns vectors.
 | `nearestObjects(N, index)` | `nearest_objects(n, index)` | |
 | `closeObjects(X, Y, Z, Rmax, Rmin)` | `close_objects(x, y, z, rmax, rmin)` | `Rmin` defaults to 0 |
 | `closeObjects(index, Rmax, Rmin)` | `close_objects(index, rmax, rmin)` | |
+| `countObjects(X, Y, Z, Rmax, Rmin)` | `count_objects(x, y, z, rmax, rmin)` | a `std::size_t`; an `int` in Python |
+| `countObjects(index, Rmax, Rmin)` | `count_objects(index, rmax, rmin)` | |
+| `nearestObject(QX, QY, QZ)` | `nearest_object(qx, qy, qz)` | batch: vectors in C++, numpy arrays in Python |
+| `nearestObjects(N, QX, QY, QZ)` | `nearest_objects(n, qx, qy, qz, *, out=None)` | `n*N` flat in C++; `(n_query, n)` in Python |
+| `closeObjects(QX, QY, QZ, Rmax, Rmin)` | `close_objects(qx, qy, qz, rmax, rmin)` | a `MeshGrid::Batch`; a tuple `(indices, offsets)` in Python, offsets `int64` |
+| `countObjects(QX, QY, QZ, Rmax, Rmin)` | `count_objects(qx, qy, qz, rmax, rmin, *, out=None)` | `std::vector<std::uint64_t>`; `int64` in Python |
+| `nearestObject(indices)` | `nearest_object(indices)` | batch over objects; Python takes any integer array |
+| `nearestObjects(N, indices)` | `nearest_objects(n, indices, *, out=None)` | |
+| `closeObjects(indices, Rmax, Rmin)` | `close_objects(indices, rmax, rmin)` | |
+| `countObjects(indices, Rmax, Rmin)` | `count_objects(indices, rmax, rmin, *, out=None)` | |
+| `MeshGrid::Batch` | — | `indices` and `offsets` members; Python returns the two arrays |
 | `get_Cell(X, Y, Z)` | `get_cell(x, y, z)` | |
 | `get_CellCoords(X, Y, Z)` | `get_cell_coords(x, y, z)` | |
 | `get_ObjectsInCell(X, Y, Z)` | `get_objects_in_cell(x, y, z)` | |
@@ -29,14 +40,15 @@ and returns numpy arrays where C++ returns vectors.
 
 ## What exists on one side only
 
-**Batched queries, Python only.** The three point-taking queries also accept
-arrays of query points and answer them in one call. C++ has no equivalent and
-needs none: the cost batching removes is crossing the Python boundary, and a C++
-caller writes a loop. The [guide](guide.md#batched-queries-and-the-form-they-return)
-covers the form they return.
+**Container forms, C++ only.** Every C++ query that returns a container has an
+overload taking one as its last argument, which is cleared, filled, and keeps
+its capacity: `closeObjects(X, Y, Z, Rmax, Rmin, out)`,
+`nearestObjects(N, index, out)`, `countObjects(QX, QY, QZ, Rmax, out)` and so
+on. The [guide](guide.md#reusing-a-container-in-c) shows them in a loop.
 
-**The index-taking overloads have no batched form in either language,** their
-input being a single index.
+**`out=`, Python only.** The batched `nearest_objects` and `count_objects` take
+a keyword-only `out=`, an array to fill and return instead of allocating one.
+The [guide](guide.md#reusing-an-array-in-python) gives its rules.
 
 ## Where the two behave differently
 
@@ -44,5 +56,7 @@ Nowhere, deliberately. The Python module is a thin binding: same guarantees,
 same exceptions, same order of results, same closed interval `Rmin <= d <= Rmax`
 on `closeObjects` / `close_objects`. What differs is only the shape of what
 comes back — a numpy `uint32` array in place of a `std::vector<unsigned int>`,
-a tuple in place of a `std::array` — and that the Python arrays own their data
-and are safe to keep after the grid is gone.
+an `int64` array in place of a `std::vector<std::uint64_t>`, a tuple in place
+of a `std::array` or a `MeshGrid::Batch` — and that the Python arrays own their
+data and are safe to keep after the grid is gone. A failed Python batch also
+names the query that failed in its message.

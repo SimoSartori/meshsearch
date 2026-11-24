@@ -74,6 +74,10 @@ if (MESHSEARCH_BUILD_EXAMPLES)
   add_executable(example_periodic examples/example_periodic.cpp)
   target_link_libraries(example_periodic PRIVATE meshsearch)
   target_compile_options(example_periodic PRIVATE ${MESHSEARCH_PRIVATE_OPTIONS})
+
+  add_executable(example_batch examples/example_batch.cpp)
+  target_link_libraries(example_batch PRIVATE meshsearch)
+  target_compile_options(example_batch PRIVATE ${MESHSEARCH_PRIVATE_OPTIONS})
 endif()
 
 if (MESHSEARCH_BUILD_TESTS)
@@ -104,6 +108,7 @@ if (MESHSEARCH_BUILD_TESTS)
 
   if (MESHSEARCH_BUILD_EXAMPLES)
     add_test(NAME example_periodic COMMAND example_periodic)
+    add_test(NAME example_batch COMMAND example_batch)
   endif()
 endif()
 

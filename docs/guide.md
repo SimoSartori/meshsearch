@@ -134,10 +134,200 @@ non-periodic one over the same points and cells, the larger figure with all
 three axes periodic. A grid with no periodic axis runs the same code, at the same
 speed, as before the option existed, and returns the same results.
 
-## Batched queries, and the form they return
+## Batched queries
 
-```{include} ../README.md
-:parser: myst_parser.sphinx_
-:start-after: <!-- docs:batched-start -->
-:end-before: <!-- docs:batched-end -->
+Every query also comes as a batch, in both languages: over many points, or
+over many objects already in the grid. A batch has the name of the single
+query; what tells them apart is the argument: three vectors (C++) or three
+numpy arrays (Python) in place of three numbers, or a vector or array of
+indices in place of one index. In C++:
+
+```{literalinclude} ../examples/example_batch.cpp
+:language: cpp
+:start-at: "const std::vector<unsigned int> nearest = grid.nearestObject(QX, QY, QZ);"
+:end-at: "printf(\"query 12 has %llu neighbours within %.2f\\n\", (unsigned long long)(last-first), radius);"
 ```
+
+In Python the query points must be numpy arrays rather than lists, because an
+array argument is what selects the batch; a one-element array is still a batch
+and returns a one-element result:
+
+```{literalinclude} ../examples/example_batch.py
+:language: python
+:start-at: "queries = rng.random((50_000, 3))"
+:end-at: "qz = np.ascontiguousarray(queries[:, 2])"
+```
+
+```{literalinclude} ../examples/example_batch.py
+:language: python
+:start-at: "nearest = grid.nearest_object(qx, qy, qz)"
+:end-at: "five = grid.nearest_objects(5, qx, qy, qz)"
+```
+
+**Results are in input order.** Query `i`'s answer is in position `i`, exactly
+the answer the single query gives for that point or object, in the same order within it.
+How the batch is worked through internally is not visible in the result: a
+large batch, of a hundred thousand queries or more, is answered in an order
+that follows the grid's cells, so that consecutive queries read neighbouring
+memory, and is then put back into input order. That is faster than the same
+queries asked one by one, and in Python it also saves the few microseconds that
+crossing into the module costs per call, which can be more than a query itself
+takes.
+
+### Batches over objects
+
+A batch over objects takes their indices, and each object is excluded from its
+own answer, as in the single index query. In C++ the indices are a
+`std::vector<unsigned int>`:
+
+```{literalinclude} ../examples/example_batch.cpp
+:language: cpp
+:start-at: "const std::vector<unsigned int> objects = {0, 1, 2};"
+:end-at: "(unsigned long long)around[0], (unsigned long long)around[1], (unsigned long long)around[2]);"
+```
+
+In Python they are a one-dimensional array of any integer dtype: the `uint32`
+arrays the queries return, or numpy's default `int64`. The array is read as it
+is, never converted, so an index cannot wrap round to another object: a
+negative value, one too large to be an index, or a removed object raises
+`meshsearch.IndexError`, naming the query. An array that is not of integers
+raises `TypeError`.
+
+```{literalinclude} ../examples/example_batch.py
+:language: python
+:start-at: "objects = nearest[:1000]"
+:end-at: "assert np.array_equal(np.diff(ring_offsets), around)"
+```
+
+### Errors
+
+A batch raises wherever one of its queries would, and returns
+nothing partial. Python names the first query that fails, as in
+`query 99: X coordinate outside the box`; C++ raises the single query's
+`Error` or `IndexError`. The checks that do not depend on a query — on the
+radii, on `N` against the number of objects, on the coordinate arrays having
+the same length — are made even for an empty batch.
+
+### The shape of a batch result
+
+`nearestObject` returns one index per query, and `nearestObjects` returns
+exactly `N` per query, so their batches are rectangular: a vector of `n*N` with
+query `i`'s at `[i*N, (i+1)*N)` in C++, an `(n_query, N)` array in Python.
+
+A shell is not rectangular, since the number found varies per query.
+`closeObjects` therefore returns the compressed-row form: one array of every
+index found, concatenated in query order, and an array of offsets with one
+more entry than there are queries, starting at 0 and ending at the number of
+indices. The results of query `i` run from `offsets[i]` up to, excluding,
+`offsets[i+1]`; a query that found nothing has two equal offsets, never a
+missing entry. In C++ the two arrays are the members `indices` and `offsets` of
+a `MeshGrid::Batch`; in Python `close_objects` returns them as a tuple. The
+offsets are 64-bit, because a batch can find more results in total than 32 bits
+can count: `std::uint64_t` in C++, and `int64` in Python, numpy's standard
+integer, which indexes, slices and repeats without a cast.
+
+```{literalinclude} ../examples/example_batch.py
+:language: python
+:start-at: "indices, offsets = grid.close_objects(qx, qy, qz, radius)"
+:end-at: "assert np.array_equal(counts, within)"
+```
+
+What makes the form worth learning is pairing each result with the query it
+came from. `indices` and `query_of` below are two flat arrays of the same
+length, so any per-query quantity is one vectorised expression over every
+result at once: `np.bincount(query_of, weights=...)` reduces per query, and
+boolean masks select across queries. A list of arrays would cost one Python
+object per query, which is the overhead the batch exists to remove, so none is
+offered:
+
+```{literalinclude} ../examples/example_batch.py
+:language: python
+:start-at: "query_of = np.repeat(np.arange(len(qx)), counts)"
+:end-at: "mean_distance = np.divide(summed, counts, out=np.zeros(len(qx)), where=counts > 0)"
+```
+
+## Counting neighbours
+
+`countObjects` (`count_objects` in Python) returns how many objects
+`closeObjects` would return, with the same arguments and the same closed
+interval `Rmin <= d <= Rmax`, without collecting them. When only the number
+matters, for a density estimate or a pair count, it is the cheaper call. It has
+the same four forms as `closeObjects`: a point or an object index, one query or
+a batch. A batch of counts is a vector of `std::uint64_t` in C++ and an `int64`
+array in Python, in input order; a single count is a `std::size_t` or a Python
+`int`.
+
+```{literalinclude} ../examples/example_batch.cpp
+:language: cpp
+:start-at: "const std::vector<std::uint64_t> within = grid.countObjects(QX, QY, QZ, radius);"
+:end-at: "printf(\"query 12 counted: %llu\\n\", (unsigned long long)within[12]);"
+```
+
+```{literalinclude} ../examples/example_batch.py
+:language: python
+:start-at: "radius = 0.02"
+:end-at: "within = grid.count_objects(qx, qy, qz, radius)"
+```
+
+## Reusing a container in C++
+
+Each C++ query that returns a container also has a form that writes into one
+the caller passes, always as the last argument: a `std::vector<unsigned int>`
+for indices, a `std::vector<std::uint64_t>` for counts, a `MeshGrid::Batch` for
+a batch of shells. The container is cleared and then filled, and it keeps the
+capacity it had. In a loop, declare it once outside the loop: after the first
+few calls it has grown to the largest answer seen, and from then on no call
+allocates.
+
+```{literalinclude} ../examples/example_batch.cpp
+:language: cpp
+:start-at: "std::vector<unsigned int> found;"
+:end-at: "(unsigned long long)totals[0], (unsigned long long)totals[1], (unsigned long long)totals[2]);"
+```
+
+The `closeObjects` and `countObjects` forms come with and without `Rmin`, as
+the returning forms do through the default argument, so the container is last
+either way. In the two index batches of `nearestObject` and `nearestObjects`,
+the container may be the vector of indices itself, which is then replaced by
+the answers. If the call throws, the container's content is unspecified.
+
+## Reusing an array in Python
+
+Python returns new arrays, but two batches have a result whose shape is known
+before they run, and accept an array to write into instead, through the
+keyword-only argument `out=`: the batched `nearest_objects`, whose result is
+`(n_query, n)`, and the batched `count_objects`, whose result is `(n_query,)`,
+over points or over objects alike. The call fills the array and returns it.
+
+```{literalinclude} ../examples/example_batch.py
+:language: python
+:start-at: "neighbours = np.empty((len(qx), 5), dtype=np.uint32)"
+:end-at: "assert np.array_equal(neighbours, five)"
+```
+
+The array must already be exactly the result: `uint32` for the indices of
+`nearest_objects` and `int64` for counts, of the exact shape, C-contiguous and
+writeable. Anything else is an error, never a silent conversion, since a
+converted copy would be a different array and the one passed in would stay
+unwritten. A wrong dtype, a read-only array, or something that is not an array
+raises `TypeError`; a wrong shape or a non-contiguous layout raises
+`meshsearch.Error`. A C-contiguous view into a larger array, such as one row of
+a table, is accepted, and only its elements are written. The array is checked
+before any query runs and is not written to if the call raises.
+
+`close_objects` has no `out=`: how many indices a batch of shells finds is
+known only once it has run, so no array could be supplied in advance. Use
+`count_objects` first if the number is needed beforehand.
+
+## Threads
+
+Const members — every query — may be called concurrently on one grid from any
+number of threads; `addObject` and `removeObject` may not run alongside
+anything else on the same grid. The library starts no threads of its own: a
+batch runs on the thread that calls it.
+
+In Python, a batched call releases the GIL while the queries run, so other
+Python threads keep running meanwhile, and several threads can query one grid
+at the same time. The caller is then responsible for the rule above: do not
+modify a grid with `add_object` or `remove_object` while other threads query
+it. A single-point query holds the GIL throughout.
