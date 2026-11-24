@@ -43,6 +43,20 @@ jobs:
             fi
           fi
 
+      # PyPI rejects an upload with an unknown classifier, and nothing else in
+      # the build notices one.
+      - name: The classifiers are valid
+        run: |
+          pip install trove-classifiers
+          python - <<'PY'
+          import pathlib, tomllib
+          from trove_classifiers import classifiers
+          used = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["classifiers"]
+          bad = [c for c in used if c not in classifiers]
+          if bad:
+              raise SystemExit(f"not valid trove classifiers: {bad}")
+          PY
+
       - name: Build
         run: pipx run build --sdist
 
