@@ -95,6 +95,8 @@
 
 ### Changed (build)
 
+- Python 3.10 is the minimum version (`requires-python >= 3.10`, as bitvf). Breaking for
+  Python 3.9: pip no longer installs new releases there.
 - meshsearch's own translation units, and the Python module, are also compiled
   with `-fno-math-errno` where `-ffp-contract=off` is set. Results are
   unchanged.
