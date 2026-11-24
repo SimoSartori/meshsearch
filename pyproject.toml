@@ -13,7 +13,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "Simone Sartori" }]
 dependencies = ["numpy"]
 classifiers = [
-    "Programming Language :: Python :: Free Threading :: 2 - Beta",
+    "Programming Language :: Python :: Free Threading :: 5 - Production/Stable",
 ]
 
 [project.urls]
