@@ -25,6 +25,10 @@ namespace {
 
   const double pad_factor = 1.+0x1p-40;
 
+  const double skip_factor = 1.-0x1p-40;
+
+  const double far_reach = 3.46413;
+
   bool checkedProduct (const std::uint64_t a, const std::uint64_t b, std::uint64_t& out)
   {
     if (a != 0 && b > std::numeric_limits<std::uint64_t>::max()/a) return false;
@@ -92,28 +96,58 @@ namespace {
     return exceeds((reach*reach)*stop_factor, threshold);
   }
 
-  bool looseShellBeyond (const unsigned int shell, const double cellsize, const double threshold)
+  struct CellFaces {
+    double lo[3];
+    double pad[3];
+    double cellsize;
+  };
+
+  CellFaces cellFaces (const std::vector<std::vector<double>>& lims,
+                       const std::array<unsigned int, 3>& nCells,
+                       const double cellsize)
   {
-    const double reach = (shell > 1) ? (shell-1.)*cellsize : 0.;
-    return exceeds(reach*reach, threshold);
+    CellFaces faces;
+    faces.cellsize = cellsize;
+    for (int i=0; i<3; ++i) {
+      const double span = double(nCells[i])*cellsize;
+      faces.lo[i] = lims[i][0];
+      faces.pad[i] = pad_scale*(std::fabs(lims[i][0])+std::fabs(lims[i][1])+2.*span+2.*cellsize);
+    }
+    return faces;
   }
 
-  unsigned int firstShell (const std::vector<std::vector<double>>& lims,
-                           const std::array<unsigned int, 3>& nCells,
-                           const double cellsize, const size_t nShells,
-                           const double Rmin, const double Rmin_sq)
+  double axisGap (const CellFaces& faces, const int axis, const std::int64_t cell, const double q)
+  {
+    const double lower = faces.lo[axis]+double(cell)*faces.cellsize;
+    const double upper = faces.lo[axis]+double(cell+1)*faces.cellsize;
+    const double gap = (q < lower) ? lower-q : (q > upper) ? q-upper : 0.;
+    const double padded = gap-faces.pad[axis];
+    return (padded > 0.) ? padded : 0.;
+  }
+
+  bool cellBeyond (const CellFaces& faces, const std::int64_t cx, const std::int64_t cy, const std::int64_t cz,
+                   const double X, const double Y, const double Z, const double threshold)
+  {
+    if (!(threshold <= huge_sq)) return false;
+    const double gx = axisGap(faces, 0, cx, X);
+    const double gy = axisGap(faces, 1, cy, Y);
+    const double gz = axisGap(faces, 2, cz, Z);
+    const double bound_sq = gx*gx+gy*gy+gz*gz;
+    return bound_sq >= tiny_sq && bound_sq*skip_factor > threshold;
+  }
+
+  unsigned int firstShell (const CellFaces& faces, const size_t nShells, const double Rmin, const double Rmin_sq)
   {
     if (!(Rmin_sq >= tiny_sq)) return 0;
 
     double pad_sq = 0.;
     for (int i=0; i<3; ++i) {
-      const double span = double(nCells[i])*cellsize;
-      const double pad = pad_scale*(std::fabs(lims[i][0])+std::fabs(lims[i][1])+2.*span+2.*cellsize)/cellsize;
+      const double pad = faces.pad[i]/faces.cellsize;
       pad_sq += pad*pad;
     }
     const double pad_cells = std::sqrt(pad_sq)*pad_factor;
 
-    const double start = std::floor(Rmin*(1./cellsize))-5.-std::ceil(pad_cells);
+    const double start = std::floor((Rmin*(1./faces.cellsize)-pad_cells)-far_reach);
     if (!(start > 0.)) return 0;
     return (start < double(nShells)) ? static_cast<unsigned int>(start) : static_cast<unsigned int>(nShells);
   }
@@ -397,6 +431,8 @@ unsigned int meshsearch::MeshGrid::nearestObject (const double X, const double Y
   const int nCy = static_cast<int>(m_nCells[1]);
   const int nCz = static_cast<int>(m_nCells[2]);
 
+  const CellFaces faces = cellFaces(m_lims, m_nCells, m_cellsize);
+
   double min_dist_sq = std::numeric_limits<double>::max();
   unsigned int finalInd = std::numeric_limits<unsigned int>::max();
   unsigned int maskInd = 0;
@@ -409,7 +445,9 @@ unsigned int meshsearch::MeshGrid::nearestObject (const double X, const double Y
       const std::int64_t currY = std::int64_t(targetY)+offset.j;
       const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
       if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
-        for (const auto& part_idx : m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))]) {
+        const auto& cell = m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
+        if (cell.empty() || cellBeyond(faces, currX, currY, currZ, X, Y, Z, min_dist_sq)) continue;
+        for (const auto& part_idx : cell) {
           const double dx = m_X[part_idx]-X;
           const double dy = m_Y[part_idx]-Y;
           const double dz = m_Z[part_idx]-Z;
@@ -453,6 +491,8 @@ unsigned int meshsearch::MeshGrid::nearestObject (const unsigned int index) cons
   const int nCy = static_cast<int>(m_nCells[1]);
   const int nCz = static_cast<int>(m_nCells[2]);
 
+  const CellFaces faces = cellFaces(m_lims, m_nCells, m_cellsize);
+
   double min_dist_sq = std::numeric_limits<double>::max();
   unsigned int finalInd = std::numeric_limits<unsigned int>::max();
   unsigned int maskInd = 0;
@@ -465,7 +505,9 @@ unsigned int meshsearch::MeshGrid::nearestObject (const unsigned int index) cons
       const std::int64_t currY = std::int64_t(targetY)+offset.j;
       const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
       if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
-        for (const auto& part_idx : m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))]) {
+        const auto& cell = m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
+        if (cell.empty() || cellBeyond(faces, currX, currY, currZ, X, Y, Z, min_dist_sq)) continue;
+        for (const auto& part_idx : cell) {
           if (part_idx == self) continue;
           const double dx = m_X[part_idx]-X;
           const double dy = m_Y[part_idx]-Y;
@@ -506,18 +548,22 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
   const int nCy = static_cast<int>(m_nCells[1]);
   const int nCz = static_cast<int>(m_nCells[2]);
 
+  const CellFaces faces = cellFaces(m_lims, m_nCells, m_cellsize);
+
   std::priority_queue<PartNode> pq;
   unsigned int maskInd = 0;
 
   while (maskInd < m_mask->size()) {
-    if (pq.size() == N && looseShellBeyond(maskInd, m_cellsize, pq.top().dist_sq)) break;
+    if (pq.size() == N && shellBeyond(maskInd, m_cellsize, pq.top().dist_sq)) break;
 
     for (const auto& offset : (*m_mask)[maskInd]) {
       const std::int64_t currX = std::int64_t(targetX)+offset.i;
       const std::int64_t currY = std::int64_t(targetY)+offset.j;
       const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
       if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
-        for (const auto& part_idx : m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))]) {
+        const auto& cell = m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
+        if (cell.empty() || (pq.size() == N && cellBeyond(faces, currX, currY, currZ, X, Y, Z, pq.top().dist_sq))) continue;
+        for (const auto& part_idx : cell) {
           const double dx = m_X[part_idx]-X;
           const double dy = m_Y[part_idx]-Y;
           const double dz = m_Z[part_idx]-Z;
@@ -570,18 +616,22 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
   const int nCy = static_cast<int>(m_nCells[1]);
   const int nCz = static_cast<int>(m_nCells[2]);
 
+  const CellFaces faces = cellFaces(m_lims, m_nCells, m_cellsize);
+
   std::priority_queue<PartNode> pq;
   unsigned int maskInd = 0;
 
   while (maskInd < m_mask->size()) {
-    if (pq.size() == N && looseShellBeyond(maskInd, m_cellsize, pq.top().dist_sq)) break;
+    if (pq.size() == N && shellBeyond(maskInd, m_cellsize, pq.top().dist_sq)) break;
 
     for (const auto& offset : (*m_mask)[maskInd]) {
       const std::int64_t currX = std::int64_t(targetX)+offset.i;
       const std::int64_t currY = std::int64_t(targetY)+offset.j;
       const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
       if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
-        for (const auto& part_idx : m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))]) {
+        const auto& cell = m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
+        if (cell.empty() || (pq.size() == N && cellBeyond(faces, currX, currY, currZ, X, Y, Z, pq.top().dist_sq))) continue;
+        for (const auto& part_idx : cell) {
           if (part_idx == self) continue;
           const double dx = m_X[part_idx]-X;
           const double dy = m_Y[part_idx]-Y;
@@ -631,8 +681,10 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const double X, co
   const int nCy = static_cast<int>(m_nCells[1]);
   const int nCz = static_cast<int>(m_nCells[2]);
 
+  const CellFaces faces = cellFaces(m_lims, m_nCells, m_cellsize);
+
   const unsigned int nShells = static_cast<unsigned int>(m_mask->size());
-  const unsigned int min_mask_idx = firstShell(m_lims, m_nCells, m_cellsize, nShells, Rmin, Rmin_sq);
+  const unsigned int min_mask_idx = firstShell(faces, nShells, Rmin, Rmin_sq);
 
   std::vector<unsigned int> finalInd;
 
@@ -644,7 +696,9 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const double X, co
       const std::int64_t currY = std::int64_t(targetY)+offset.j;
       const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
       if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
-        for (const auto& part_idx : m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))]) {
+        const auto& cell = m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
+        if (cell.empty() || cellBeyond(faces, currX, currY, currZ, X, Y, Z, Rmax_sq)) continue;
+        for (const auto& part_idx : cell) {
           const double dx = m_X[part_idx]-X;
           const double dy = m_Y[part_idx]-Y;
           const double dz = m_Z[part_idx]-Z;
@@ -687,8 +741,10 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const unsigned int
   const int nCy = static_cast<int>(m_nCells[1]);
   const int nCz = static_cast<int>(m_nCells[2]);
 
+  const CellFaces faces = cellFaces(m_lims, m_nCells, m_cellsize);
+
   const unsigned int nShells = static_cast<unsigned int>(m_mask->size());
-  const unsigned int min_mask_idx = firstShell(m_lims, m_nCells, m_cellsize, nShells, Rmin, Rmin_sq);
+  const unsigned int min_mask_idx = firstShell(faces, nShells, Rmin, Rmin_sq);
 
   std::vector<unsigned int> finalInd;
 
@@ -700,7 +756,9 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const unsigned int
       const std::int64_t currY = std::int64_t(targetY)+offset.j;
       const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
       if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
-        for (const auto& part_idx : m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))]) {
+        const auto& cell = m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
+        if (cell.empty() || cellBeyond(faces, currX, currY, currZ, X, Y, Z, Rmax_sq)) continue;
+        for (const auto& part_idx : cell) {
           if (part_idx == self) continue;
           const double dx = m_X[part_idx]-X;
           const double dy = m_Y[part_idx]-Y;
