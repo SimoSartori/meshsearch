@@ -140,9 +140,15 @@ NB_MODULE(meshsearch, m)
             const std::vector<double>& z,
             const double cellsize,
             const std::optional<std::vector<std::vector<double>>>& limits) {
-           new (self) meshsearch::MeshGrid(
-             x, y, z, cellsize,
-             limits ? *limits : std::vector<std::vector<double>>());
+           meshsearch::MeshGrid::Options options;
+           if (limits) {
+             if (limits->size() != 3 || (*limits)[0].size() != 2 || (*limits)[1].size() != 2 || (*limits)[2].size() != 2)
+               throw meshsearch::Error("the limits matrix must be 3x2");
+             std::array<std::array<double,2>,3> box;
+             for (int a=0; a<3; ++a) box[a] = {(*limits)[a][0], (*limits)[a][1]};
+             options.limits = box;
+           }
+           new (self) meshsearch::MeshGrid(x, y, z, cellsize, options);
          },
          "x"_a, "y"_a, "z"_a, "cellsize"_a, "limits"_a = nb::none(),
          "Build the grid over the points, which must be of equal length.\n"
