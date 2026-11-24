@@ -13,11 +13,43 @@
   slightly below the value requested when an axis is periodic.
 - Examples `examples/example_periodic.cpp` and `examples/example_periodic.py`,
   and a section on periodic boxes in the guide.
+- C++: `countObjects`, the number of objects `closeObjects` would return,
+  for a point or an object index.
+- C++: batches of every query, under the same names, taking
+  `const std::vector<double>&` X, Y, Z or `const std::vector<unsigned int>&`
+  indices: `nearestObject` returns one index per query, `nearestObjects` `n*N`
+  indices, `closeObjects` a `MeshGrid::Batch` (`indices` and 64-bit `offsets`),
+  `countObjects` a `std::vector<std::uint64_t>`. Results are in input order; a
+  large batch is answered internally in cell order, which is faster.
+- C++: every query returning a container has an overload writing into one
+  passed as the last argument, cleared and then filled, its capacity kept.
+- Python: `count_objects(x, y, z, rmax, rmin=0)` and
+  `count_objects(index, rmax, rmin=0)`, and their batches over arrays of points
+  or of object indices, returning `int64` counts.
+- Python: batches over arrays of object indices for `nearest_object`,
+  `nearest_objects` and `close_objects`. The indices may be of any integer
+  dtype and are not converted: a negative or too large value raises
+  `meshsearch.IndexError`.
+- Python: keyword-only `out=` on the batched `nearest_objects` and
+  `count_objects`: a C-contiguous array of exactly the result's dtype and shape,
+  filled and returned. Any other array is an error, never converted.
+- Examples `examples/example_batch.cpp` and additions to
+  `examples/example_batch.py`, and sections of the guide on batches, counts,
+  container forms, `out=` and threads.
 
 ### Changed (Python interface)
 
 - **Breaking:** `limits` is keyword-only. `MeshGrid(x, y, z, cellsize, limits)`
   raises `TypeError`; write `MeshGrid(x, y, z, cellsize, limits=limits)`.
+- **Breaking:** the offsets returned by the batched `close_objects` are
+  `int64`, formerly `uint32`.
+- The batched queries run through the C++ batches, so a large batch is
+  answered in cell order; results are unchanged and still in query order. The
+  GIL is released while they run, as before.
+- A batch whose arguments the grid refuses regardless of the points — an `n`
+  above the number of objects for `nearest_objects`, invalid radii for
+  `close_objects`, an empty grid for `nearest_object` — now raises even when
+  the batch is empty.
 
 ### Changed (C++ interface)
 

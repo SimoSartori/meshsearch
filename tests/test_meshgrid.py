@@ -100,6 +100,7 @@ def test_method_names_are_snake_case_with_no_aliases():
         "add_object",
         "cellsize",
         "close_objects",
+        "count_objects",
         "get_cell",
         "get_cell_coords",
         "get_objects_in_cell",
@@ -616,7 +617,8 @@ def test_an_object_in_the_last_layer_the_rmax_bound_scans():
 
 
 # --------------------------------------------------------------------------
-# the batched queries, which exist only in Python
+# the batched queries: each one answers exactly as the loop of single queries
+# would, results in query order, and fails where the loop would fail
 
 
 @pytest.fixture(scope="module")
@@ -693,15 +695,19 @@ def test_csr_counts_come_from_np_diff(grids, batch_queries):
         [grids["matched"].close_objects(a, b, c, 0.1).size for a, b, c in zip(qx, qy, qz)])
 
 
-def test_batched_results_are_uint32(grids, batch_queries):
+def test_batched_results_are_uint32_and_offsets_int64(grids, batch_queries):
     qx, qy, qz = batch_queries
     grid = grids["matched"]
     indices, offsets = grid.close_objects(qx, qy, qz, 0.1)
     for array in (grid.nearest_object(qx, qy, qz),
                   grid.nearest_objects(4, qx, qy, qz),
-                  indices, offsets):
+                  indices):
         assert isinstance(array, np.ndarray)
         assert array.dtype == np.uint32
+    # offsets count results, which can outnumber what 32 bits address; int64
+    # is numpy's standard integer, which slices and repeats without a cast
+    assert isinstance(offsets, np.ndarray)
+    assert offsets.dtype == np.int64
 
 
 def test_an_empty_query_array(grids):
@@ -732,15 +738,17 @@ def test_scalar_calls_are_unaffected_by_the_overload(grids):
     assert grid.close_objects(0.5, 0.5, 0.5, 0.1).ndim == 1
 
 
-def test_the_index_overloads_have_no_batched_form(grids):
-    """Their input is one index, so there is no boundary cost to amortise."""
+def test_every_index_query_has_a_batched_form(grids):
+    """An array of indices selects the batch; a single index the scalar call."""
     grid = grids["matched"]
     indices = np.array([0, 1, 2], dtype=np.uint32)
-    for call in (lambda: grid.nearest_object(indices),
-                 lambda: grid.nearest_objects(3, indices),
-                 lambda: grid.close_objects(indices, 0.1)):
-        with pytest.raises(TypeError):
-            call()
+    assert grid.nearest_object(indices).shape == (3,)
+    assert grid.nearest_objects(3, indices).shape == (3, 3)
+    found, offsets = grid.close_objects(indices, 0.1)
+    assert found.dtype == np.uint32 and offsets.dtype == np.int64 and offsets.shape == (4,)
+    assert grid.count_objects(indices, 0.1).shape == (3,)
+    assert isinstance(grid.nearest_object(1), int)
+    assert grid.nearest_objects(3, 1).shape == (3,)
 
 
 @pytest.mark.parametrize(
@@ -805,6 +813,375 @@ def test_batched_queries_see_removals(points, batch_queries):
         np.array([grid.nearest_object(a, b, c) for a, b, c in zip(qx, qy, qz)],
                  dtype=np.uint32))
     assert all(grid.is_alive(int(i)) for i in after)
+
+
+# --------------------------------------------------------------------------
+# count_objects: the number close_objects would return, checked against brute
+# force in every regime, scalar and batched, point and index forms
+
+
+@pytest.mark.parametrize("name", [name for name, _ in REGIMES])
+@pytest.mark.parametrize("rmax,rmin", [(0.1, 0.0), (0.15, 0.08), (0.001, 0.0)])
+def test_count_objects_matches_brute_force(points, grids, batch_queries, name, rmax, rmin):
+    X, Y, Z = points
+    grid = grids[name]
+    alive = np.ones(len(X), dtype=bool)
+    qx, qy, qz = batch_queries
+
+    expected = [len(brute_shell(a, b, c, X, Y, Z, alive, rmax, rmin))
+                for a, b, c in zip(qx, qy, qz)]
+    assert [grid.count_objects(a, b, c, rmax, rmin) for a, b, c in zip(qx, qy, qz)] == expected
+    assert grid.count_objects(qx, qy, qz, rmax, rmin).tolist() == expected
+
+    objects = np.arange(0, len(X), 7)
+    expected = [len(brute_shell(X[i], Y[i], Z[i], X, Y, Z, alive, rmax, rmin, skip=i))
+                for i in objects]
+    assert [grid.count_objects(int(i), rmax, rmin) for i in objects] == expected
+    assert grid.count_objects(objects, rmax, rmin).tolist() == expected
+
+
+def test_count_objects_result_types(grids, batch_queries):
+    qx, qy, qz = batch_queries
+    grid = grids["matched"]
+    assert isinstance(grid.count_objects(0.5, 0.5, 0.5, 0.1), int)
+    assert isinstance(grid.count_objects(3, 0.1), int)
+    for counts in (grid.count_objects(qx, qy, qz, 0.1),
+                   grid.count_objects(np.arange(10, dtype=np.uint32), 0.1)):
+        assert isinstance(counts, np.ndarray)
+        assert counts.dtype == np.int64
+
+
+def test_count_objects_takes_any_integer_index_array(grids):
+    grid = grids["matched"]
+    expected = [grid.count_objects(i, 0.1) for i in (3, 1, 4)]
+    for dtype in (np.uint32, np.int64, np.int32, np.uint64, np.uint16):
+        assert grid.count_objects(np.array([3, 1, 4], dtype=dtype), 0.1).tolist() == expected
+    # strided input is read where it lies, not required to be contiguous
+    assert grid.count_objects(np.array([3, 0, 1, 0, 4])[::2], 0.1).tolist() == expected
+
+
+def test_count_objects_never_wraps_an_index(grids):
+    """A value that is not a valid index raises: none is wrapped to 32 bits,
+    which would silently name another object."""
+    grid = grids["matched"]
+    for bad in (np.array([1, -1]), np.array([1, 2 ** 32 + 1], dtype=np.uint64)):
+        with pytest.raises(meshsearch.IndexError) as caught:
+            grid.count_objects(bad, 0.1)
+        assert "query 1" in str(caught.value)
+    with pytest.raises(TypeError):
+        grid.count_objects(np.array([1.0, 2.0]), 0.1)
+
+
+def test_count_objects_index_batch_raises_on_a_removed_object(points):
+    X, Y, Z = points
+    grid = meshsearch.MeshGrid(X, Y, Z, MPS, limits=BOX)
+    grid.remove_object(5)
+    with pytest.raises(meshsearch.IndexError) as caught:
+        grid.count_objects(np.array([1, 2, 5, 6], dtype=np.uint32), 0.1)
+    assert "query 2" in str(caught.value)
+
+
+def test_count_objects_bad_radii_raise(grids, batch_queries):
+    qx, qy, qz = batch_queries
+    grid = grids["matched"]
+    for rmax, rmin in [(-1.0, 0.0), (1.0, 2.0), (float("nan"), 0.0)]:
+        for call in (lambda: grid.count_objects(0.5, 0.5, 0.5, rmax, rmin),
+                     lambda: grid.count_objects(3, rmax, rmin),
+                     lambda: grid.count_objects(qx, qy, qz, rmax, rmin),
+                     lambda: grid.count_objects(np.arange(3), rmax, rmin)):
+            with pytest.raises(meshsearch.Error):
+                call()
+
+
+# --------------------------------------------------------------------------
+# batches over object indices: each answers as the loop of single index
+# queries would, in order, on a grid with removals so that the indices are not
+# simply the positions in the grid; and they share count_objects' input rules
+
+
+@pytest.fixture(scope="module")
+def thinned(points):
+    X, Y, Z = points
+    out = {}
+    for name, size in REGIMES:
+        grid = meshsearch.MeshGrid(X, Y, Z, size, limits=BOX)
+        for index in range(0, len(X), 9):
+            grid.remove_object(index)
+        out[name] = grid
+    return out
+
+
+def live_objects(grid, n):
+    return np.array([i for i in range(n) if grid.is_alive(i)][::5], dtype=np.uint32)
+
+
+@pytest.mark.parametrize("name", [name for name, _ in REGIMES])
+def test_index_batches_match_the_loop(points, thinned, name):
+    grid = thinned[name]
+    objects = live_objects(grid, len(points[0]))
+
+    assert grid.nearest_object(objects).tolist() == [grid.nearest_object(int(i)) for i in objects]
+
+    got = grid.nearest_objects(6, objects)
+    assert got.shape == (len(objects), 6)
+    assert np.array_equal(got, np.array([grid.nearest_objects(6, int(i)) for i in objects]))
+
+    for rmax, rmin in [(0.1, 0.0), (0.15, 0.08)]:
+        found, offsets = grid.close_objects(objects, rmax, rmin)
+        assert offsets[0] == 0 and offsets[-1] == len(found) and len(offsets) == len(objects) + 1
+        for q, i in enumerate(objects):
+            assert np.array_equal(found[offsets[q]:offsets[q + 1]],
+                                  grid.close_objects(int(i), rmax, rmin))
+        assert np.array_equal(np.diff(offsets), grid.count_objects(objects, rmax, rmin))
+
+
+@pytest.mark.parametrize("dtype", [np.uint32, np.int64, np.int32, np.uint64, np.int16])
+def test_index_batches_take_any_integer_dtype(thinned, dtype):
+    grid = thinned["matched"]
+    objects = np.array([3, 1, 4], dtype=dtype)
+    assert grid.nearest_object(objects).tolist() == [grid.nearest_object(i) for i in (3, 1, 4)]
+    assert np.array_equal(grid.nearest_objects(2, objects),
+                          np.array([grid.nearest_objects(2, i) for i in (3, 1, 4)]))
+    found, offsets = grid.close_objects(objects, 0.1)
+    assert np.array_equal(found, np.concatenate([grid.close_objects(i, 0.1) for i in (3, 1, 4)]))
+
+
+@pytest.mark.parametrize("call", [
+    lambda g, idx: g.nearest_object(idx),
+    lambda g, idx: g.nearest_objects(3, idx),
+    lambda g, idx: g.close_objects(idx, 0.1),
+    lambda g, idx: g.count_objects(idx, 0.1),
+])
+def test_index_batches_never_wrap_and_name_the_query(thinned, call):
+    grid = thinned["matched"]
+    for bad in (np.array([1, 2, -1]), np.array([1, 2, 2 ** 32 + 1], dtype=np.uint64),
+                np.array([1, 2, 9], dtype=np.uint32)):          # 9 is removed
+        with pytest.raises(meshsearch.IndexError) as caught:
+            call(grid, bad)
+        assert "query 2" in str(caught.value)
+    with pytest.raises(TypeError):
+        call(grid, np.array([1.0, 2.0]))
+
+
+def test_nearest_objects_index_batch_out(thinned):
+    grid = thinned["matched"]
+    objects = np.array([1, 2, 3, 4], dtype=np.int64)
+    out = np.zeros((4, 5), dtype=np.uint32)
+    assert grid.nearest_objects(5, objects, out=out) is out
+    assert np.array_equal(out, grid.nearest_objects(5, objects))
+    with pytest.raises(meshsearch.Error):
+        grid.nearest_objects(5, objects, out=np.zeros((4, 4), dtype=np.uint32))
+    with pytest.raises(TypeError):
+        grid.nearest_objects(5, objects, out=np.zeros((4, 5), dtype=np.int64))
+
+
+def test_index_batches_refuse_what_the_grid_refuses_even_when_empty(thinned):
+    grid = thinned["matched"]
+    none = np.empty(0, dtype=np.uint32)
+    assert grid.nearest_object(none).shape == (0,)
+    assert grid.nearest_objects(3, none).shape == (0, 3)
+    found, offsets = grid.close_objects(none, 0.1)
+    assert found.shape == (0,) and offsets.tolist() == [0]
+    with pytest.raises(meshsearch.Error):
+        grid.nearest_objects(len(grid), none)            # n must be below the count
+    with pytest.raises(meshsearch.Error):
+        grid.close_objects(none, 0.1, 0.2)
+
+
+def test_a_large_index_batch_returns_results_in_query_order(points, grids):
+    grid = grids["dense"]
+    rng = np.random.default_rng(6)
+    objects = rng.integers(0, len(points[0]), 110_000)
+
+    def chunks(call):
+        return [call(objects[i:i + 1000]) for i in range(0, len(objects), 1000)]
+
+    assert np.array_equal(grid.nearest_object(objects), np.concatenate(chunks(grid.nearest_object)))
+    assert np.array_equal(grid.nearest_objects(3, objects),
+                          np.concatenate(chunks(lambda o: grid.nearest_objects(3, o))))
+    found, offsets = grid.close_objects(objects, 0.05)
+    parts = chunks(lambda o: grid.close_objects(o, 0.05))
+    assert np.array_equal(found, np.concatenate([p[0] for p in parts]))
+    assert np.array_equal(np.diff(offsets), np.concatenate([np.diff(p[1]) for p in parts]))
+
+
+# --------------------------------------------------------------------------
+# out=: the caller's array is filled and returned, and must already be exactly
+# the result, since a converted copy would leave the caller's array unwritten
+
+
+def test_out_is_filled_and_returned(grids, batch_queries):
+    qx, qy, qz = batch_queries
+    grid = grids["matched"]
+
+    out = np.zeros((len(qx), 4), dtype=np.uint32)
+    assert grid.nearest_objects(4, qx, qy, qz, out=out) is out
+    assert np.array_equal(out, grid.nearest_objects(4, qx, qy, qz))
+
+    counts = np.zeros(len(qx), dtype=np.int64)
+    assert grid.count_objects(qx, qy, qz, 0.1, out=counts) is counts
+    assert np.array_equal(counts, grid.count_objects(qx, qy, qz, 0.1))
+
+    objects = np.arange(20)
+    counts = np.zeros(20, dtype=np.int64)
+    assert grid.count_objects(objects, 0.1, out=counts) is counts
+    assert np.array_equal(counts, grid.count_objects(objects, 0.1))
+
+
+def test_out_may_be_reused_across_calls(grids, batch_queries):
+    qx, qy, qz = batch_queries
+    grid = grids["matched"]
+    counts = np.empty(len(qx), dtype=np.int64)
+    for rmax in (0.05, 0.1, 0.2):
+        grid.count_objects(qx, qy, qz, rmax, out=counts)
+        assert np.array_equal(counts, grid.count_objects(qx, qy, qz, rmax))
+
+
+def test_out_may_be_a_view_into_a_larger_array(grids, batch_queries):
+    """A C-contiguous view is accepted and only its own elements written."""
+    qx, qy, qz = batch_queries
+    grid = grids["matched"]
+    table = np.zeros((3, len(qx)), dtype=np.int64)
+    grid.count_objects(qx, qy, qz, 0.1, out=table[1])
+    assert np.array_equal(table[1], grid.count_objects(qx, qy, qz, 0.1))
+    assert not table[0].any() and not table[2].any()
+
+
+@pytest.mark.parametrize("make", [
+    lambda n: np.zeros(n, dtype=np.uint64),        # wrong dtype, even unsigned
+    lambda n: np.zeros(n, dtype=np.uint32),        # wrong dtype
+    lambda n: [0] * n,                             # not an array
+])
+def test_out_of_the_wrong_type_raises_type_error(grids, batch_queries, make):
+    qx, qy, qz = batch_queries
+    with pytest.raises(TypeError):
+        grids["matched"].count_objects(qx, qy, qz, 0.1, out=make(len(qx)))
+
+
+def test_a_read_only_out_raises_type_error(grids, batch_queries):
+    qx, qy, qz = batch_queries
+    out = np.zeros(len(qx), dtype=np.int64)
+    out.flags.writeable = False
+    with pytest.raises(TypeError):
+        grids["matched"].count_objects(qx, qy, qz, 0.1, out=out)
+
+
+@pytest.mark.parametrize("make", [
+    lambda n: np.zeros(n - 1, dtype=np.int64),          # too short
+    lambda n: np.zeros((n, 1), dtype=np.int64),         # wrong rank
+    lambda n: np.zeros(2 * n, dtype=np.int64)[::2],     # not contiguous
+])
+def test_out_of_the_wrong_shape_or_layout_raises(grids, batch_queries, make):
+    qx, qy, qz = batch_queries
+    with pytest.raises(meshsearch.Error):
+        grids["matched"].count_objects(qx, qy, qz, 0.1, out=make(len(qx)))
+
+
+def test_nearest_objects_out_must_match_both_dimensions(grids, batch_queries):
+    qx, qy, qz = batch_queries
+    grid = grids["matched"]
+    for shape in [(len(qx), 3), (len(qx) - 1, 4), (4, len(qx))]:
+        with pytest.raises(meshsearch.Error):
+            grid.nearest_objects(4, qx, qy, qz, out=np.zeros(shape, dtype=np.uint32))
+    with pytest.raises(meshsearch.Error):
+        grid.nearest_objects(4, qx, qy, qz,
+                             out=np.zeros((4, len(qx)), dtype=np.uint32).T)
+    with pytest.raises(TypeError):
+        grid.nearest_objects(4, qx, qy, qz, out=np.zeros((len(qx), 4), dtype=np.uint64))
+
+
+def test_out_is_untouched_when_the_call_raises(grids, batch_queries):
+    qx, qy, qz = batch_queries
+    bad = qx.copy()
+    bad[17] = 5.0
+    counts = np.full(len(qx), 7, dtype=np.int64)
+    with pytest.raises(meshsearch.Error):
+        grids["matched"].count_objects(bad, qy, qz, 0.1, out=counts)
+    assert np.all(counts == 7)
+
+
+def test_out_is_keyword_only(grids, batch_queries):
+    qx, qy, qz = batch_queries
+    with pytest.raises(TypeError):
+        grids["matched"].count_objects(qx, qy, qz, 0.1, 0.0,
+                                       np.zeros(len(qx), dtype=np.int64))
+
+
+# --------------------------------------------------------------------------
+# a large batch is answered in cell order internally; its results must still
+# come back in query order, identical to the same queries asked in small
+# batches, which run in input order
+
+
+@pytest.fixture(scope="module")
+def large_batch():
+    rng = np.random.default_rng(99)
+    pts = rng.random((120_000, 3))
+    return tuple(np.ascontiguousarray(pts[:, a]) for a in range(3))
+
+
+def chunked(call, queries, size=1000):
+    qx, qy, qz = queries
+    return [call(qx[i:i + size], qy[i:i + size], qz[i:i + size])
+            for i in range(0, len(qx), size)]
+
+
+@pytest.mark.parametrize("name", ["dense", "sparse"])
+def test_a_large_batch_returns_results_in_query_order(grids, large_batch, name):
+    grid = grids[name]
+    qx, qy, qz = large_batch
+
+    assert np.array_equal(grid.nearest_object(qx, qy, qz),
+                          np.concatenate(chunked(grid.nearest_object, large_batch)))
+    assert np.array_equal(grid.nearest_objects(3, qx, qy, qz),
+                          np.concatenate(chunked(lambda a, b, c: grid.nearest_objects(3, a, b, c),
+                                                 large_batch)))
+    assert np.array_equal(grid.count_objects(qx, qy, qz, 0.05),
+                          np.concatenate(chunked(lambda a, b, c: grid.count_objects(a, b, c, 0.05),
+                                                 large_batch)))
+
+    indices, offsets = grid.close_objects(qx, qy, qz, 0.05)
+    parts = chunked(lambda a, b, c: grid.close_objects(a, b, c, 0.05), large_batch)
+    assert np.array_equal(indices, np.concatenate([p[0] for p in parts]))
+    assert np.array_equal(np.diff(offsets), np.concatenate([np.diff(p[1]) for p in parts]))
+
+
+def test_a_large_index_batch_returns_counts_in_query_order(points, grids):
+    grid = grids["dense"]
+    rng = np.random.default_rng(5)
+    objects = rng.integers(0, len(points[0]), 110_000)
+    counts = grid.count_objects(objects, 0.05)
+    expected = np.concatenate([grid.count_objects(objects[i:i + 1000], 0.05)
+                               for i in range(0, len(objects), 1000)])
+    assert np.array_equal(counts, expected)
+
+
+# --------------------------------------------------------------------------
+# the GIL is released during a batched call, and const queries may run
+# concurrently on one grid, so threads querying one grid each get the answer
+# a lone call gets
+
+
+def test_batched_calls_from_several_threads(grids, large_batch):
+    import threading
+
+    grid = grids["matched"]
+    qx, qy, qz = (a[:30_000] for a in large_batch)
+    expected = (grid.nearest_objects(3, qx, qy, qz), grid.count_objects(qx, qy, qz, 0.05))
+    failures = []
+
+    def work():
+        for _ in range(3):
+            if not (np.array_equal(grid.nearest_objects(3, qx, qy, qz), expected[0])
+                    and np.array_equal(grid.count_objects(qx, qy, qz, 0.05), expected[1])):
+                failures.append(True)
+
+    threads = [threading.Thread(target=work) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not failures
 
 
 def test_a_wide_shell_at_large_rmin():
@@ -1123,4 +1500,11 @@ def test_the_periodic_example_runs():
     import runpy
     from pathlib import Path
     path = Path(__file__).resolve().parent.parent / "examples" / "example_periodic.py"
+    runpy.run_path(str(path), run_name="__main__")
+
+
+def test_the_batch_example_runs():
+    import runpy
+    from pathlib import Path
+    path = Path(__file__).resolve().parent.parent / "examples" / "example_batch.py"
     runpy.run_path(str(path), run_name="__main__")

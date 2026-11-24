@@ -19,6 +19,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -80,16 +81,24 @@ namespace {
   // keeps the overload dispatch unambiguous.
   using Coords = nb::ndarray<const double, nb::ndim<1>, nb::c_contig, nb::device::cpu>;
 
-  using IndexArray2D = nb::ndarray<nb::numpy, unsigned int, nb::ndim<2>>;
+  // Object indices for the batched index calls: a 1-D array of any integer
+  // type, taken without conversion and range-checked element by element, so
+  // that no index is silently wrapped into another.
+  using Indices = nb::ndarray<nb::ndim<1>, nb::device::cpu>;
 
-  IndexArray2D indexArray2D (std::vector<unsigned int>&& values,
-                             const size_t rows, const size_t cols)
+  // A caller's out= array, taken without conversion and checked in outBuffer.
+  using OutArray = nb::ndarray<nb::device::cpu>;
+
+  // Hand a vector's buffer to numpy and let a capsule own it.
+  template <class T, size_t D>
+  nb::ndarray<nb::numpy, T, nb::ndim<D>> owned (std::vector<T>&& values,
+                                                const std::array<size_t, D>& shape)
   {
-    auto* held = new std::vector<unsigned int>(std::move(values));
+    auto* held = new std::vector<T>(std::move(values));
     nb::capsule owner(held, [](void* p) noexcept {
-      delete static_cast<std::vector<unsigned int>*>(p);
+      delete static_cast<std::vector<T>*>(p);
     });
-    return IndexArray2D(held->data(), {rows, cols}, owner);
+    return nb::ndarray<nb::numpy, T, nb::ndim<D>>(held->data(), D, shape.data(), owner);
   }
 
   size_t batchSize (const Coords& x, const Coords& y, const Coords& z)
@@ -99,11 +108,118 @@ namespace {
     return x.shape(0);
   }
 
+  std::vector<double> points (const Coords& a)
+  {
+    return std::vector<double>(a.data(), a.data()+a.shape(0));
+  }
+
   // A batched call fails where the single-point call would, naming the query
   // that did it, and returns nothing partial.
   std::string queryPrefix (const size_t i)
   {
     return "query "+std::to_string(i)+": ";
+  }
+
+  template <class T>
+  bool readIndex (const Indices& a, const size_t i, long long& value)
+  {
+    const T element = static_cast<const T*>(a.data())[i*static_cast<size_t>(a.stride(0))];
+    if constexpr (std::is_signed_v<T>) {
+      value = static_cast<long long>(element);
+      return element >= 0 && static_cast<unsigned long long>(element) <= std::numeric_limits<unsigned int>::max();
+    }
+    else {
+      value = static_cast<long long>(std::min<unsigned long long>(element, std::numeric_limits<long long>::max()));
+      return static_cast<unsigned long long>(element) <= std::numeric_limits<unsigned int>::max();
+    }
+  }
+
+  std::vector<unsigned int> indexVector (const Indices& a)
+  {
+    const auto type = a.dtype();
+    const bool sign = type.code == static_cast<uint8_t>(nb::dlpack::dtype_code::Int);
+    const bool unsign = type.code == static_cast<uint8_t>(nb::dlpack::dtype_code::UInt);
+    if ((!sign && !unsign) || type.lanes != 1 || (type.bits != 8 && type.bits != 16 && type.bits != 32 && type.bits != 64))
+      throw nb::type_error("indices must be a 1-D array of integers");
+
+    std::vector<unsigned int> out(a.shape(0));
+    for (size_t i=0; i<out.size(); ++i) {
+      long long value = 0;
+      bool ok = false;
+      switch (type.bits) {
+      case 8:  ok = sign ? readIndex<int8_t>(a, i, value)  : readIndex<uint8_t>(a, i, value);  break;
+      case 16: ok = sign ? readIndex<int16_t>(a, i, value) : readIndex<uint16_t>(a, i, value); break;
+      case 32: ok = sign ? readIndex<int32_t>(a, i, value) : readIndex<uint32_t>(a, i, value); break;
+      default: ok = sign ? readIndex<int64_t>(a, i, value) : readIndex<uint64_t>(a, i, value); break;
+      }
+      if (!ok) throw meshsearch::IndexError(queryPrefix(i)+"index "+std::to_string(value)+" is out of range");
+      out[i] = static_cast<unsigned int>(value);
+    }
+    return out;
+  }
+
+  // The caller's out= array, which must already be exactly what the call
+  // would return: dtype, shape, C-contiguous and writeable. Nothing is
+  // converted, because a converted copy would be a different array and the
+  // caller's would silently stay unwritten.
+  template <class T>
+  T* outBuffer (OutArray& array, const nb::handle out, const std::vector<size_t>& shape, const char* dtype)
+  {
+    std::string expected = "(";
+    for (size_t d=0; d<shape.size(); ++d) expected += (d ? ", " : "")+std::to_string(shape[d]);
+    expected += shape.size() == 1 ? ",)" : ")";
+    const std::string wanted = "out must be a writeable C-contiguous "+std::string(dtype)+" array of shape "+expected;
+
+    if (!nb::try_cast(out, array, false) || array.dtype() != nb::dtype<T>())
+      throw nb::type_error(wanted.c_str());
+    bool fits = array.ndim() == shape.size();
+    for (size_t d=0; fits && d<shape.size(); ++d) fits = array.shape(d) == shape[d];
+    int64_t step = 1;
+    for (size_t d=shape.size(); fits && d-- > 0; ) {
+      if (shape[d] > 1 && array.stride(d) != step) fits = false;
+      step *= static_cast<int64_t>(shape[d]);
+    }
+    if (!fits) throw meshsearch::Error(wanted);
+    return static_cast<T*>(array.data());
+  }
+
+  // Counts and offsets reach Python as int64, numpy's standard integer, which
+  // indexes, slices and repeats without a cast. Each is bounded by a number
+  // of results held in memory, so it fits.
+  nb::ndarray<nb::numpy, std::int64_t, nb::ndim<1>> int64Array (const std::vector<std::uint64_t>& values)
+  {
+    const size_t size = values.size();
+    std::vector<std::int64_t> converted(size);
+    std::transform(values.begin(), values.end(), converted.begin(),
+                   [](const std::uint64_t v) { return static_cast<std::int64_t>(v); });
+    return owned<std::int64_t, 1>(std::move(converted), {size});
+  }
+
+  void copyCounts (const std::vector<std::uint64_t>& values, std::int64_t* dest)
+  {
+    std::transform(values.begin(), values.end(), dest,
+                   [](const std::uint64_t v) { return static_cast<std::int64_t>(v); });
+  }
+
+  // Run a C++ batch member. If it raises, the queries are repeated one by one
+  // to find the first that raises on its own, and that error is raised,
+  // naming the query; the error path alone pays for this. An error no single
+  // query reproduces, such as an n the grid refuses on an empty batch, is
+  // raised as it is.
+  template <class Batch, class Single>
+  void runBatch (const size_t queries, Batch&& batch, Single&& single)
+  {
+    try {
+      batch();
+    }
+    catch (const meshsearch::Error&) {
+      for (size_t i=0; i<queries; ++i) {
+        try { single(i); }
+        catch (const meshsearch::IndexError& e) { throw meshsearch::IndexError(queryPrefix(i)+e.what()); }
+        catch (const meshsearch::Error& e) { throw meshsearch::Error(queryPrefix(i)+e.what()); }
+      }
+      throw;
+    }
   }
 
 }
@@ -233,24 +349,59 @@ NB_MODULE(meshsearch, m)
 
     .def("nearest_object",
          [](const meshsearch::MeshGrid& self, const Coords& x, const Coords& y, const Coords& z) {
-           const size_t n = batchSize(x, y, z);
-           const double* px = x.data();
-           const double* py = y.data();
-           const double* pz = z.data();
-           std::vector<unsigned int> out(n);
+           const size_t queries = batchSize(x, y, z);
+           std::vector<unsigned int> found;
            {
              nb::gil_scoped_release released;
-             for (size_t i=0; i<n; ++i) {
-               try { out[i] = self.nearestObject(px[i], py[i], pz[i]); }
-               catch (const meshsearch::IndexError& e) { throw meshsearch::IndexError(queryPrefix(i)+e.what()); }
-               catch (const meshsearch::Error& e) { throw meshsearch::Error(queryPrefix(i)+e.what()); }
-             }
+             const auto X = points(x), Y = points(y), Z = points(z);
+             runBatch(queries,
+                      [&] { self.nearestObject(X, Y, Z, found); },
+                      [&] (const size_t i) { self.nearestObject(X[i], Y[i], Z[i]); });
            }
-           return indexArray(std::move(out));
+           return indexArray(std::move(found));
          },
          "x"_a, "y"_a, "z"_a,
-         "The object nearest to each of an array of points: one index per\n"
-         "query, in query order.")
+         "The object nearest to each of an array of points: a uint32 array\n"
+         "with one index per query, in query order.\n"
+         "A large batch is answered in cell order internally, which is faster;\n"
+         "the results are always in query order.\n\n"
+         "Raises meshsearch.Error, naming the first query that fails, where\n"
+         "the single-point call would, and returns nothing partial; also if\n"
+         "the arrays differ in length, or if the grid is empty, even for an\n"
+         "empty batch.\n\n"
+         "The GIL is released while the queries run, so other Python threads\n"
+         "may run, and may query the same grid; none may modify it until the\n"
+         "call returns.")
+
+    .def("nearest_object",
+         [](const meshsearch::MeshGrid& self, const Indices& indices) {
+           std::vector<unsigned int> found;
+           {
+             nb::gil_scoped_release released;
+             const auto objects = indexVector(indices);
+             runBatch(objects.size(),
+                      [&] { self.nearestObject(objects, found); },
+                      [&] (const size_t i) { self.nearestObject(objects[i]); });
+           }
+           return indexArray(std::move(found));
+         },
+         "indices"_a.noconvert(),
+         "The object nearest to each object of an array of indices, each\n"
+         "excluded from its own answer: a uint32 array with one index per\n"
+         "query, in query order.\n\n"
+         "indices is a 1-D array of any integer dtype, such as the uint32\n"
+         "arrays the queries return. It is not converted: a value that is not\n"
+         "a valid index raises meshsearch.IndexError rather than being\n"
+         "wrapped, and an array that is not of integers raises TypeError.\n\n"
+         "A large batch is answered in cell order internally, which is faster;\n"
+         "the results are always in query order.\n\n"
+         "Raises meshsearch.IndexError, naming the first query that fails, on\n"
+         "an index that is out of range or removed, and returns nothing\n"
+         "partial; meshsearch.Error if fewer than two objects remain, even\n"
+         "for an empty array.\n\n"
+         "The GIL is released while the queries run, so other Python threads\n"
+         "may run, and may query the same grid; none may modify it until the\n"
+         "call returns.")
 
     .def("nearest_object",
          nb::overload_cast<double, double, double>(&meshsearch::MeshGrid::nearestObject, nb::const_),
@@ -267,40 +418,90 @@ NB_MODULE(meshsearch, m)
 
     .def("nearest_objects",
          [](const meshsearch::MeshGrid& self, const unsigned int n,
-            const Coords& x, const Coords& y, const Coords& z) {
+            const Coords& x, const Coords& y, const Coords& z, const nb::object& out) -> nb::object {
            const size_t queries = batchSize(x, y, z);
-           const double* px = x.data();
-           const double* py = y.data();
-           const double* pz = z.data();
-           // The array is sized only once the first query has passed, so that
-           // an n the grid refuses raises the single-point call's error rather
-           // than attempting an allocation of n_query * n entries first.
-           std::vector<unsigned int> out;
+           OutArray target;
+           unsigned int* dest = nullptr;
+           if (!out.is_none()) dest = outBuffer<unsigned int>(target, out, {queries, size_t(n)}, "uint32");
+           std::vector<unsigned int> found;
            {
              nb::gil_scoped_release released;
-             for (size_t i=0; i<queries; ++i) {
-               std::vector<unsigned int> found;
-               try { found = self.nearestObjects(n, px[i], py[i], pz[i]); }
-               catch (const meshsearch::IndexError& e) { throw meshsearch::IndexError(queryPrefix(i)+e.what()); }
-               catch (const meshsearch::Error& e) { throw meshsearch::Error(queryPrefix(i)+e.what()); }
-               if (i == 0) {
-                 if (size_t(n) != 0 && queries > std::numeric_limits<size_t>::max()/size_t(n))
-                   throw meshsearch::Error("the batch holds more results than 64-bit sizes can count");
-                 out.resize(queries*size_t(n));
-               }
-               std::copy(found.begin(), found.end(), out.begin()+i*size_t(n));
-             }
+             const auto X = points(x), Y = points(y), Z = points(z);
+             runBatch(queries,
+                      [&] { self.nearestObjects(n, X, Y, Z, found); },
+                      [&] (const size_t i) { self.nearestObjects(n, X[i], Y[i], Z[i]); });
+             if (dest != nullptr) std::copy(found.begin(), found.end(), dest);
            }
-           return indexArray2D(std::move(out), queries, n);
+           if (dest != nullptr) return out;
+           return nb::cast(owned<unsigned int, 2>(std::move(found), {queries, size_t(n)}));
          },
-         "n"_a, "x"_a, "y"_a, "z"_a,
+         "n"_a, "x"_a, "y"_a, "z"_a, nb::kw_only(), "out"_a = nb::none(),
          "The n objects nearest to each of an array of points, nearest first;\n"
-         "ties by ascending index: an (n_query, n) array, rectangular because\n"
-         "every query returns exactly n. A tie at the last place keeps the\n"
-         "lower indices. The array is allocated only after the first query\n"
-         "has succeeded, so an n the grid refuses raises that query's\n"
-         "meshsearch.Error rather than MemoryError; meshsearch.Error also if\n"
-         "n_query * n exceeds what 64-bit sizes can count.")
+         "ties by ascending index: a uint32 array of shape (n_query, n),\n"
+         "rectangular because every query returns exactly n. A tie at the\n"
+         "last place keeps the lower indices.\n"
+         "A large batch is answered in cell order internally, which is faster;\n"
+         "the results are always in query order.\n\n"
+         "out, keyword-only, is an array to write the result into instead of\n"
+         "allocating one, and is then returned. It must already be exactly\n"
+         "the result: a writeable, C-contiguous uint32 array of shape\n"
+         "(n_query, n). Nothing is converted: a wrong dtype, a read-only array\n"
+         "or something that is not an array raises TypeError; a wrong shape\n"
+         "or a non-contiguous array raises meshsearch.Error. out is checked\n"
+         "before any query runs, and is not written to if the call raises.\n\n"
+         "Raises meshsearch.Error, naming the first query that fails, where\n"
+         "the single-point call would, and returns nothing partial; also if\n"
+         "the arrays differ in length, or if n exceeds the number of objects,\n"
+         "even for an empty batch, or if n_query * n exceeds what 64-bit sizes\n"
+         "can count.\n\n"
+         "The GIL is released while the queries run, so other Python threads\n"
+         "may run, and may query the same grid; none may modify it until the\n"
+         "call returns.")
+
+    .def("nearest_objects",
+         [](const meshsearch::MeshGrid& self, const unsigned int n,
+            const Indices& indices, const nb::object& out) -> nb::object {
+           const size_t queries = indices.shape(0);
+           OutArray target;
+           unsigned int* dest = nullptr;
+           if (!out.is_none()) dest = outBuffer<unsigned int>(target, out, {queries, size_t(n)}, "uint32");
+           std::vector<unsigned int> found;
+           {
+             nb::gil_scoped_release released;
+             const auto objects = indexVector(indices);
+             runBatch(queries,
+                      [&] { self.nearestObjects(n, objects, found); },
+                      [&] (const size_t i) { self.nearestObjects(n, objects[i]); });
+             if (dest != nullptr) std::copy(found.begin(), found.end(), dest);
+           }
+           if (dest != nullptr) return out;
+           return nb::cast(owned<unsigned int, 2>(std::move(found), {queries, size_t(n)}));
+         },
+         "n"_a, "indices"_a.noconvert(), nb::kw_only(), "out"_a = nb::none(),
+         "The n objects nearest to each object of an array of indices, nearest\n"
+         "first, each object excluded from its own answer; ties by ascending\n"
+         "index: a uint32 array of shape (len(indices), n).\n\n"
+         "indices is a 1-D array of any integer dtype, such as the uint32\n"
+         "arrays the queries return. It is not converted: a value that is not\n"
+         "a valid index raises meshsearch.IndexError rather than being\n"
+         "wrapped, and an array that is not of integers raises TypeError.\n\n"
+         "A large batch is answered in cell order internally, which is faster;\n"
+         "the results are always in query order.\n\n"
+         "out, keyword-only, is an array to write the result into instead of\n"
+         "allocating one, and is then returned. It must already be exactly\n"
+         "the result: a writeable, C-contiguous uint32 array of shape\n"
+         "(len(indices), n). Nothing is converted: a wrong dtype, a read-only array\n"
+         "or something that is not an array raises TypeError; a wrong shape\n"
+         "or a non-contiguous array raises meshsearch.Error. out is checked\n"
+         "before any query runs, and is not written to if the call raises.\n\n"
+         "Raises meshsearch.IndexError, naming the first query that fails, on\n"
+         "an index that is out of range or removed, and returns nothing\n"
+         "partial; meshsearch.Error if n is not below the number of\n"
+         "objects, even for an empty array, or if len(indices) * n exceeds\n"
+         "what 64-bit sizes can count.\n\n"
+         "The GIL is released while the queries run, so other Python threads\n"
+         "may run, and may query the same grid; none may modify it until the\n"
+         "call returns.")
 
     .def("nearest_objects",
          [](const meshsearch::MeshGrid& self, const unsigned int n,
@@ -325,34 +526,76 @@ NB_MODULE(meshsearch, m)
          [](const meshsearch::MeshGrid& self, const Coords& x, const Coords& y, const Coords& z,
             const double rmax, const double rmin) {
            const size_t queries = batchSize(x, y, z);
-           const double* px = x.data();
-           const double* py = y.data();
-           const double* pz = z.data();
-           std::vector<unsigned int> indices;
-           std::vector<unsigned int> offsets(queries+1, 0);
+           meshsearch::MeshGrid::Batch found;
            {
              nb::gil_scoped_release released;
-             for (size_t i=0; i<queries; ++i) {
-               try {
-                 const auto found = self.closeObjects(px[i], py[i], pz[i], rmax, rmin);
-                 indices.insert(indices.end(), found.begin(), found.end());
-               }
-               catch (const meshsearch::IndexError& e) { throw meshsearch::IndexError(queryPrefix(i)+e.what()); }
-               catch (const meshsearch::Error& e) { throw meshsearch::Error(queryPrefix(i)+e.what()); }
-               if (indices.size() > std::numeric_limits<unsigned int>::max())
-                 throw meshsearch::Error("the batch holds more results than a uint32 offset can address");
-               offsets[i+1] = static_cast<unsigned int>(indices.size());
-             }
+             const auto X = points(x), Y = points(y), Z = points(z);
+             runBatch(queries,
+                      [&] { self.closeObjects(X, Y, Z, rmax, rmin, found); },
+                      [&] (const size_t i) { self.countObjects(X[i], Y[i], Z[i], rmax, rmin); });
            }
-           return nb::make_tuple(indexArray(std::move(indices)), indexArray(std::move(offsets)));
+           return nb::make_tuple(indexArray(std::move(found.indices)), int64Array(found.offsets));
          },
          "x"_a, "y"_a, "z"_a, "rmax"_a, "rmin"_a = 0.,
          "Objects at distance d from each of an array of points, with\n"
-         "rmin <= d <= rmax, as (indices, offsets) in compressed-row form:\n"
-         "the results of query i are indices[offsets[i]:offsets[i+1]].\n"
+         "rmin <= d <= rmax, as a tuple (indices, offsets) in compressed-row\n"
+         "form: the results of query i are indices[offsets[i]:offsets[i+1]],\n"
+         "in the order the single call returns them. indices is uint32 and\n"
+         "offsets int64; offsets has n_query + 1 entries, starts at 0 and\n"
+         "ends at len(indices). A query with no results gives an empty slice,\n"
+         "never a missing entry.\n"
+         "A large batch is answered in cell order internally, which is faster;\n"
+         "the results are always in query order.\n\n"
+         "There is no out= argument: the length of indices is not known until\n"
+         "the queries have run, so no array could be supplied in advance.\n"
+         "count_objects gives the counts alone.\n\n"
+         "Raises meshsearch.Error, naming the first query that fails, where\n"
+         "the single-point call would, and returns nothing partial; also if\n"
+         "the arrays differ in length, or on the radii, even for an empty\n"
+         "batch.\n\n"
+         "The GIL is released while the queries run, so other Python threads\n"
+         "may run, and may query the same grid; none may modify it until the\n"
+         "call returns.")
+
+    .def("close_objects",
+         [](const meshsearch::MeshGrid& self, const Indices& indices,
+            const double rmax, const double rmin) {
+           meshsearch::MeshGrid::Batch found;
+           {
+             nb::gil_scoped_release released;
+             const auto objects = indexVector(indices);
+             runBatch(objects.size(),
+                      [&] { self.closeObjects(objects, rmax, rmin, found); },
+                      [&] (const size_t i) { self.countObjects(objects[i], rmax, rmin); });
+           }
+           return nb::make_tuple(indexArray(std::move(found.indices)), int64Array(found.offsets));
+         },
+         "indices"_a.noconvert(), "rmax"_a, "rmin"_a = 0.,
+         "Objects at distance d from each object of an array of indices, with\n"
+         "rmin <= d <= rmax, each object excluded from its own answer, as a\n"
+         "tuple (indices, offsets) in compressed-row form: the results of\n"
+         "query i are indices[offsets[i]:offsets[i+1]], in the order the\n"
+         "single call returns them. indices is uint32 and offsets int64;\n"
          "offsets has n_query + 1 entries, starts at 0 and ends at\n"
          "len(indices). A query with no results gives an empty slice, never a\n"
-         "missing entry.")
+         "missing entry.\n"
+         "\n"
+         "indices is a 1-D array of any integer dtype, such as the uint32\n"
+         "arrays the queries return. It is not converted: a value that is not\n"
+         "a valid index raises meshsearch.IndexError rather than being\n"
+         "wrapped, and an array that is not of integers raises TypeError.\n\n"
+         "A large batch is answered in cell order internally, which is faster;\n"
+         "the results are always in query order.\n\n"
+         "There is no out= argument: the length of indices is not known until\n"
+         "the queries have run, so no array could be supplied in advance.\n"
+         "count_objects gives the counts alone.\n\n"
+         "Raises meshsearch.IndexError, naming the first query that fails, on\n"
+         "an index that is out of range or removed, and returns nothing\n"
+         "partial; meshsearch.Error on the radii, even for an empty\n"
+         "array.\n\n"
+         "The GIL is released while the queries run, so other Python threads\n"
+         "may run, and may query the same grid; none may modify it until the\n"
+         "call returns.")
 
     .def("close_objects",
          [](const meshsearch::MeshGrid& self, const double x, const double y, const double z,
@@ -375,6 +618,103 @@ NB_MODULE(meshsearch, m)
          "unspecified order. The query object is excluded by identity, not by\n"
          "distance: another object coincident with it is at d = 0 and is\n"
          "returned.")
+
+    .def("count_objects",
+         [](const meshsearch::MeshGrid& self, const Coords& x, const Coords& y, const Coords& z,
+            const double rmax, const double rmin, const nb::object& out) -> nb::object {
+           const size_t queries = batchSize(x, y, z);
+           OutArray target;
+           std::int64_t* dest = nullptr;
+           if (!out.is_none()) dest = outBuffer<std::int64_t>(target, out, {queries}, "int64");
+           std::vector<std::uint64_t> found;
+           {
+             nb::gil_scoped_release released;
+             const auto X = points(x), Y = points(y), Z = points(z);
+             runBatch(queries,
+                      [&] { self.countObjects(X, Y, Z, rmax, rmin, found); },
+                      [&] (const size_t i) { self.countObjects(X[i], Y[i], Z[i], rmax, rmin); });
+             if (dest != nullptr) copyCounts(found, dest);
+           }
+           if (dest != nullptr) return out;
+           return nb::cast(int64Array(found));
+         },
+         "x"_a, "y"_a, "z"_a, "rmax"_a, "rmin"_a = 0., nb::kw_only(), "out"_a = nb::none(),
+         "For each of an array of points, the number of objects close_objects\n"
+         "would return for it: an int64 array with one count per query, in\n"
+         "query order. The indices are never collected, so this is cheaper\n"
+         "than close_objects when only the counts are wanted.\n"
+         "A large batch is answered in cell order internally, which is faster;\n"
+         "the results are always in query order.\n\n"
+         "out, keyword-only, is an array to write the result into instead of\n"
+         "allocating one, and is then returned. It must already be exactly\n"
+         "the result: a writeable, C-contiguous int64 array of shape\n"
+         "(n_query,). Nothing is converted: a wrong dtype, a read-only array\n"
+         "or something that is not an array raises TypeError; a wrong shape\n"
+         "or a non-contiguous array raises meshsearch.Error. out is checked\n"
+         "before any query runs, and is not written to if the call raises.\n\n"
+         "Raises meshsearch.Error, naming the first query that fails, where\n"
+         "the single-point call would, and returns nothing partial; also if\n"
+         "the arrays differ in length, or on the radii, even for an empty\n"
+         "batch.\n\n"
+         "The GIL is released while the queries run, so other Python threads\n"
+         "may run, and may query the same grid; none may modify it until the\n"
+         "call returns.")
+
+    .def("count_objects",
+         [](const meshsearch::MeshGrid& self, const Indices& indices,
+            const double rmax, const double rmin, const nb::object& out) -> nb::object {
+           const size_t queries = indices.shape(0);
+           OutArray target;
+           std::int64_t* dest = nullptr;
+           if (!out.is_none()) dest = outBuffer<std::int64_t>(target, out, {queries}, "int64");
+           std::vector<std::uint64_t> found;
+           {
+             nb::gil_scoped_release released;
+             const auto objects = indexVector(indices);
+             runBatch(queries,
+                      [&] { self.countObjects(objects, rmax, rmin, found); },
+                      [&] (const size_t i) { self.countObjects(objects[i], rmax, rmin); });
+             if (dest != nullptr) copyCounts(found, dest);
+           }
+           if (dest != nullptr) return out;
+           return nb::cast(int64Array(found));
+         },
+         "indices"_a.noconvert(), "rmax"_a, "rmin"_a = 0., nb::kw_only(), "out"_a = nb::none(),
+         "For each object of an array of indices, the number of objects\n"
+         "close_objects would return for it, the object itself excluded: an\n"
+         "int64 array with one count per index, in order.\n\n"
+         "indices is a 1-D array of any integer dtype, such as the uint32\n"
+         "arrays the queries return. It is not converted: a value that is not\n"
+         "a valid index raises meshsearch.IndexError rather than being\n"
+         "wrapped, and an array that is not of integers raises TypeError.\n\n"
+         "A large batch is answered in cell order internally, which is faster;\n"
+         "the results are always in query order.\n\n"
+         "out, keyword-only, is an array to write the result into instead of\n"
+         "allocating one, and is then returned. It must already be exactly\n"
+         "the result: a writeable, C-contiguous int64 array of shape\n"
+         "(len(indices),). Nothing is converted: a wrong dtype, a read-only array\n"
+         "or something that is not an array raises TypeError; a wrong shape\n"
+         "or a non-contiguous array raises meshsearch.Error. out is checked\n"
+         "before any query runs, and is not written to if the call raises.\n\n"
+         "Raises meshsearch.IndexError, naming the first query that fails, on\n"
+         "an index that is out of range or removed, and returns nothing\n"
+         "partial; meshsearch.Error on the radii, even for an empty\n"
+         "array.\n\n"
+         "The GIL is released while the queries run, so other Python threads\n"
+         "may run, and may query the same grid; none may modify it until the\n"
+         "call returns.")
+
+    .def("count_objects",
+         nb::overload_cast<double, double, double, double, double>(&meshsearch::MeshGrid::countObjects, nb::const_),
+         "x"_a, "y"_a, "z"_a, "rmax"_a, "rmin"_a = 0.,
+         "Number of objects close_objects would return for a point, counted\n"
+         "without collecting them.")
+
+    .def("count_objects",
+         nb::overload_cast<unsigned int, double, double>(&meshsearch::MeshGrid::countObjects, nb::const_),
+         "index"_a, "rmax"_a, "rmin"_a = 0.,
+         "Number of objects close_objects would return for an object, which\n"
+         "is excluded, counted without collecting them.")
 
     .def("get_cell", &meshsearch::MeshGrid::get_Cell, "x"_a, "y"_a, "z"_a,
          "Linear index of the cell containing a point.")
