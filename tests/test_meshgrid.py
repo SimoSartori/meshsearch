@@ -78,7 +78,7 @@ def points():
 @pytest.fixture(scope="module")
 def grids(points):
     X, Y, Z = points
-    return {name: meshsearch.MeshGrid(X, Y, Z, size, BOX) for name, size in REGIMES}
+    return {name: meshsearch.MeshGrid(X, Y, Z, size, limits=BOX) for name, size in REGIMES}
 
 
 # --------------------------------------------------------------------------
@@ -108,6 +108,7 @@ def test_method_names_are_snake_case_with_no_aliases():
         "n_cells",
         "nearest_object",
         "nearest_objects",
+        "periodic",
         "remove_object",
     }
     for absent in ("nearestObject", "closerObject", "get_lims", "get_nCells",
@@ -118,7 +119,7 @@ def test_method_names_are_snake_case_with_no_aliases():
 
 def test_len_is_the_live_count(points):
     X, Y, Z = points
-    grid = meshsearch.MeshGrid(X, Y, Z, MPS, BOX)
+    grid = meshsearch.MeshGrid(X, Y, Z, MPS, limits=BOX)
     assert len(grid) == len(X)
     grid.remove_object(0)
     assert len(grid) == len(X) - 1
@@ -128,7 +129,7 @@ def test_len_is_the_live_count(points):
 
 def test_properties(points):
     X, Y, Z = points
-    grid = meshsearch.MeshGrid(X, Y, Z, 0.25, BOX)
+    grid = meshsearch.MeshGrid(X, Y, Z, 0.25, limits=BOX)
 
     assert isinstance(grid.cellsize, float)
     assert grid.cellsize == 0.25
@@ -145,7 +146,7 @@ def test_properties(points):
 
 def test_properties_are_read_only(points):
     X, Y, Z = points
-    grid = meshsearch.MeshGrid(X, Y, Z, 0.25, BOX)
+    grid = meshsearch.MeshGrid(X, Y, Z, 0.25, limits=BOX)
     for name in ("cellsize", "n_cells", "lims"):
         with pytest.raises(AttributeError):
             setattr(grid, name, 1)
@@ -181,8 +182,8 @@ def test_empty_result_is_still_a_uint32_array(grids):
 
 def test_accepts_lists_and_numpy_arrays(points):
     X, Y, Z = points
-    from_arrays = meshsearch.MeshGrid(X, Y, Z, MPS, BOX)
-    from_lists = meshsearch.MeshGrid(X.tolist(), Y.tolist(), Z.tolist(), MPS, BOX)
+    from_arrays = meshsearch.MeshGrid(X, Y, Z, MPS, limits=BOX)
+    from_lists = meshsearch.MeshGrid(X.tolist(), Y.tolist(), Z.tolist(), MPS, limits=BOX)
     assert len(from_arrays) == len(from_lists)
     assert from_arrays.nearest_object(0.5, 0.5, 0.5) == from_lists.nearest_object(0.5, 0.5, 0.5)
 
@@ -190,11 +191,11 @@ def test_accepts_lists_and_numpy_arrays(points):
 def test_mismatched_input_lengths_raise(points):
     X, Y, Z = points
     with pytest.raises(meshsearch.Error):
-        meshsearch.MeshGrid(X[:-1], Y, Z, MPS, BOX)
+        meshsearch.MeshGrid(X[:-1], Y, Z, MPS, limits=BOX)
     with pytest.raises(meshsearch.Error):
-        meshsearch.MeshGrid(X, Y[:-1], Z, MPS, BOX)
+        meshsearch.MeshGrid(X, Y[:-1], Z, MPS, limits=BOX)
     with pytest.raises(meshsearch.Error):
-        meshsearch.MeshGrid(X, Y, Z[:-1], MPS, BOX)
+        meshsearch.MeshGrid(X, Y, Z[:-1], MPS, limits=BOX)
 
 
 def test_limits_may_be_omitted(points):
@@ -283,7 +284,7 @@ def test_bad_index_raises_index_error(grids, call):
 
 def test_remove_object_raises_index_error(points):
     X, Y, Z = points
-    grid = meshsearch.MeshGrid(X, Y, Z, MPS, BOX)
+    grid = meshsearch.MeshGrid(X, Y, Z, MPS, limits=BOX)
     with pytest.raises(meshsearch.IndexError):
         grid.remove_object(10**6)
 
@@ -323,7 +324,7 @@ def test_documented_errors_raise(grids, call):
 
 def test_add_object_outside_the_box_raises(points):
     X, Y, Z = points
-    grid = meshsearch.MeshGrid(X, Y, Z, MPS, BOX)
+    grid = meshsearch.MeshGrid(X, Y, Z, MPS, limits=BOX)
     with pytest.raises(meshsearch.Error):
         grid.add_object(5.0, 0.5, 0.5)
 
@@ -415,7 +416,7 @@ def test_index_overloads_exclude_the_query_object(grids, points, regime):
 
 def test_indices_are_stable_across_removals(points):
     X, Y, Z = points
-    grid = meshsearch.MeshGrid(X, Y, Z, MPS, BOX)
+    grid = meshsearch.MeshGrid(X, Y, Z, MPS, limits=BOX)
     alive = np.ones(len(X), dtype=bool)
 
     removed = list(range(3, len(X), 7))
@@ -450,7 +451,7 @@ def test_indices_are_stable_across_removals(points):
 )
 def test_a_removed_index_raises_from_every_member_taking_one(points, call):
     X, Y, Z = points
-    grid = meshsearch.MeshGrid(X, Y, Z, MPS, BOX)
+    grid = meshsearch.MeshGrid(X, Y, Z, MPS, limits=BOX)
     grid.remove_object(11)
     with pytest.raises(meshsearch.IndexError):
         call(grid, 11)
@@ -458,7 +459,7 @@ def test_a_removed_index_raises_from_every_member_taking_one(points, call):
 
 def test_add_object_never_reuses_an_index(points):
     X, Y, Z = points
-    grid = meshsearch.MeshGrid(X, Y, Z, MPS, BOX)
+    grid = meshsearch.MeshGrid(X, Y, Z, MPS, limits=BOX)
 
     for index in (0, 5, 9):
         grid.remove_object(index)
@@ -477,7 +478,7 @@ def test_add_object_never_reuses_an_index(points):
 
 def test_a_point_on_the_upper_face_lands_in_the_last_cell():
     grid = meshsearch.MeshGrid([0.5], [0.5], [0.5], 1.0,
-                               [[0.0, 10.0], [0.0, 4.0], [0.0, 2.0]])
+                               limits=[[0.0, 10.0], [0.0, 4.0], [0.0, 2.0]])
     assert grid.n_cells == (10, 4, 2)
     assert grid.get_cell_coords(10.0, 4.0, 2.0) == (9, 3, 1)
     assert grid.get_cell_coords(0.0, 0.0, 0.0) == (0, 0, 0)
@@ -493,7 +494,7 @@ def test_rmin_and_rmax_are_both_inclusive():
     X = [5.0, 6.0, 7.0, 8.0, 5.0, 5.0]
     Y = [5.0, 5.0, 5.0, 5.0, 7.0, 8.0]
     Z = [5.0] * 6
-    grid = meshsearch.MeshGrid(X, Y, Z, 1.0, [[0.0, 16.0]] * 3)
+    grid = meshsearch.MeshGrid(X, Y, Z, 1.0, limits=[[0.0, 16.0]] * 3)
 
     assert set(grid.close_objects(5.0, 5.0, 5.0, 2.0, 2.0).tolist()) == {2, 4}
     assert set(grid.close_objects(0, 2.0, 2.0).tolist()) == {2, 4}
@@ -509,7 +510,7 @@ def test_rmin_and_rmax_are_both_inclusive():
 def test_coincident_points():
     X = [2.0, 2.0, 2.0, 4.0]
     grid = meshsearch.MeshGrid(X, [2.0] * 3 + [2.0], [2.0] * 4, 1.0,
-                               [[0.0, 16.0]] * 3)
+                               limits=[[0.0, 16.0]] * 3)
 
     # self-exclusion is by identity, not by distance: a point coincident with
     # the query object is a different object, at distance 0, and is returned;
@@ -533,7 +534,7 @@ def test_nearest_objects_tie_order_by_hand():
     # tie. Cellsize 1.5 puts several objects in a cell, so the grid's internal
     # order is not the index order.
     a, b, c = np.meshgrid(np.arange(3.0), np.arange(3.0), np.arange(3.0), indexing="ij")
-    grid = meshsearch.MeshGrid(a.ravel(), b.ravel(), c.ravel(), 1.5, [[0.0, 3.0]] * 3)
+    grid = meshsearch.MeshGrid(a.ravel(), b.ravel(), c.ravel(), 1.5, limits=[[0.0, 3.0]] * 3)
 
     assert grid.nearest_objects(8, 13).tolist() == [4, 10, 12, 14, 16, 22, 1, 3]
     assert grid.nearest_objects(9, 1.0, 1.0, 1.0).tolist() == [13, 4, 10, 12, 14, 16, 22, 1, 3]
@@ -557,7 +558,7 @@ def test_nearest_objects_tie_order_on_a_shuffled_lattice(cellsize):
     X = (site // (side * side)).astype(float)
     Y = (site // side % side).astype(float)
     Z = (site % side).astype(float)
-    grid = meshsearch.MeshGrid(X, Y, Z, cellsize, [[0.0, float(side)]] * 3)
+    grid = meshsearch.MeshGrid(X, Y, Z, cellsize, limits=[[0.0, float(side)]] * 3)
     alive = np.ones(len(X), dtype=bool)
 
     for index in rng.choice(len(X), 30, replace=False):
@@ -588,7 +589,7 @@ def test_close_objects_across_the_radius_to_cellsize_ratio(cellsize):
     what decides how many layers are scanned and what has to be swept."""
     X, Y, Z = cloud(1500, seed=99)
     alive = np.ones(1500, dtype=bool)
-    grid = meshsearch.MeshGrid(X, Y, Z, cellsize, BOX)
+    grid = meshsearch.MeshGrid(X, Y, Z, cellsize, limits=BOX)
     rng = np.random.default_rng(11)
 
     for ratio in (0.05, 0.25, 0.5, 0.99, 1.0, 1.01, 1.5, 2.0, 2.5, 4.0, 8.0):
@@ -606,7 +607,7 @@ def test_an_object_in_the_last_layer_the_rmax_bound_scans():
     offset of 3, gap 2, layer 2, exactly 2.25 away. Rmax = 2.25 makes layer 2
     the last one scanned, so the object sits on the shell's outer edge."""
     grid = meshsearch.MeshGrid([10.75, 13.0], [10.5, 10.5], [10.5, 10.5], 1.0,
-                               [[0.0, 20.0]] * 3)
+                               limits=[[0.0, 20.0]] * 3)
     assert grid.get_cell_coords(10.75, 10.5, 10.5)[0] == 10
     assert grid.get_cell_coords(13.0, 10.5, 10.5)[0] == 13
     assert grid.close_objects(0, 2.25).tolist() == [1]
@@ -630,7 +631,7 @@ def batch_queries():
 @pytest.mark.parametrize("cellsize", [0.25, 0.08])
 def test_batched_nearest_object_matches_the_loop(points, batch_queries, cellsize):
     X, Y, Z = points
-    grid = meshsearch.MeshGrid(X, Y, Z, cellsize, BOX)
+    grid = meshsearch.MeshGrid(X, Y, Z, cellsize, limits=BOX)
     qx, qy, qz = batch_queries
 
     got = grid.nearest_object(qx, qy, qz)
@@ -643,7 +644,7 @@ def test_batched_nearest_object_matches_the_loop(points, batch_queries, cellsize
 @pytest.mark.parametrize("n", [1, 8])
 def test_batched_nearest_objects_matches_the_loop(points, batch_queries, cellsize, n):
     X, Y, Z = points
-    grid = meshsearch.MeshGrid(X, Y, Z, cellsize, BOX)
+    grid = meshsearch.MeshGrid(X, Y, Z, cellsize, limits=BOX)
     qx, qy, qz = batch_queries
 
     got = grid.nearest_objects(n, qx, qy, qz)
@@ -657,7 +658,7 @@ def test_batched_nearest_objects_matches_the_loop(points, batch_queries, cellsiz
 @pytest.mark.parametrize("rmax,rmin", [(0.1, 0.0), (0.15, 0.08), (0.001, 0.0)])
 def test_batched_close_objects_matches_the_loop(points, batch_queries, cellsize, rmax, rmin):
     X, Y, Z = points
-    grid = meshsearch.MeshGrid(X, Y, Z, cellsize, BOX)
+    grid = meshsearch.MeshGrid(X, Y, Z, cellsize, limits=BOX)
     qx, qy, qz = batch_queries
 
     indices, offsets = grid.close_objects(qx, qy, qz, rmax, rmin)
@@ -791,7 +792,7 @@ def test_mismatched_query_array_lengths_raise(grids, batch_queries):
 
 def test_batched_queries_see_removals(points, batch_queries):
     X, Y, Z = points
-    grid = meshsearch.MeshGrid(X, Y, Z, 0.08, BOX)
+    grid = meshsearch.MeshGrid(X, Y, Z, 0.08, limits=BOX)
     qx, qy, qz = batch_queries
 
     before = grid.nearest_object(qx, qy, qz)
@@ -811,7 +812,7 @@ def test_a_wide_shell_at_large_rmin():
     # corner of its cell and the object just inside the far corner of the cell
     # six cells away on each axis, at 7*sqrt(3) = 12.124 cellsize
     grid = meshsearch.MeshGrid([10.0, 17.0 - 1e-9], [10.0, 17.0 - 1e-9],
-                               [10.0, 17.0 - 1e-9], 1.0, [[0.0, 40.0]] * 3)
+                               [10.0, 17.0 - 1e-9], 1.0, limits=[[0.0, 40.0]] * 3)
     assert grid.close_objects(10.0, 10.0, 10.0, 12.2, 12.0).tolist() == [1]
     assert grid.close_objects(0, 12.2, 12.0).tolist() == [1]
 
@@ -835,7 +836,7 @@ def raises_plain_error(build):
 
 @pytest.mark.parametrize("cellsize", [INF, -INF, NAN, 0.0, -1.0])
 def test_a_cellsize_not_finite_and_positive_raises(cellsize):
-    raises_plain_error(lambda: meshsearch.MeshGrid(*SMALL, cellsize, SMALL_BOX))
+    raises_plain_error(lambda: meshsearch.MeshGrid(*SMALL, cellsize, limits=SMALL_BOX))
     raises_plain_error(lambda: meshsearch.MeshGrid(*SMALL, cellsize))
 
 
@@ -845,16 +846,16 @@ def test_a_cellsize_not_finite_and_positive_raises(cellsize):
 def test_limits_not_finite_raise(axis, end, bad):
     limits = [list(side) for side in SMALL_BOX]
     limits[axis][end] = bad
-    raises_plain_error(lambda: meshsearch.MeshGrid(*SMALL, 1.0, limits))
-    raises_plain_error(lambda: meshsearch.MeshGrid([], [], [], 1.0, limits))
+    raises_plain_error(lambda: meshsearch.MeshGrid(*SMALL, 1.0, limits=limits))
+    raises_plain_error(lambda: meshsearch.MeshGrid([], [], [], 1.0, limits=limits))
 
 
 @pytest.mark.parametrize("axis", [0, 1, 2])
 def test_inverted_limits_raise(axis):
     limits = [list(side) for side in SMALL_BOX]
     limits[axis] = [4.0, 0.0]
-    raises_plain_error(lambda: meshsearch.MeshGrid(*SMALL, 1.0, limits))
-    raises_plain_error(lambda: meshsearch.MeshGrid([], [], [], 1.0, limits))
+    raises_plain_error(lambda: meshsearch.MeshGrid(*SMALL, 1.0, limits=limits))
+    raises_plain_error(lambda: meshsearch.MeshGrid([], [], [], 1.0, limits=limits))
 
 
 @pytest.mark.parametrize("bad", [NAN, INF, -INF])
@@ -862,7 +863,7 @@ def test_inverted_limits_raise(axis):
 def test_a_coordinate_not_finite_raises(axis, bad):
     coords = [list(c) for c in SMALL]
     coords[axis][1] = bad
-    raises_plain_error(lambda: meshsearch.MeshGrid(*coords, 1.0, SMALL_BOX))
+    raises_plain_error(lambda: meshsearch.MeshGrid(*coords, 1.0, limits=SMALL_BOX))
     raises_plain_error(lambda: meshsearch.MeshGrid(*coords, 1.0))
 
 
@@ -880,7 +881,7 @@ def test_a_zero_extent_axis_gets_one_cell(flat_axes):
     limits = [[0.0, 1.0], [level, level] if flat_axes == 2 else [0.0, 1.0], [level, level]]
 
     for grid in (meshsearch.MeshGrid(X, Y, Z, cellsize),
-                 meshsearch.MeshGrid(X, Y, Z, cellsize, limits)):
+                 meshsearch.MeshGrid(X, Y, Z, cellsize, limits=limits)):
         for axis in range(3 - flat_axes, 3):
             assert grid.n_cells[axis] == 1
             assert grid.lims[axis][0] == pytest.approx(level - cellsize / 2)
@@ -904,7 +905,7 @@ def test_a_zero_extent_axis_gets_one_cell(flat_axes):
     ([[0.0, 4194304.0]] * 3, 1.0),
 ])
 def test_a_grid_too_large_to_count_raises(limits, cellsize):
-    raises_plain_error(lambda: meshsearch.MeshGrid([], [], [], cellsize, limits))
+    raises_plain_error(lambda: meshsearch.MeshGrid([], [], [], cellsize, limits=limits))
 
 
 # 46341 cells along x: past the 32-bit threshold where 0.1.0's offset
@@ -916,7 +917,7 @@ def test_a_long_axis_past_the_32_bit_threshold():
     rng = np.random.default_rng(46341)
     X, Y, Z = rng.uniform(0, length, 3000), rng.random(3000), rng.random(3000)
     alive = np.ones(3000, dtype=bool)
-    grid = meshsearch.MeshGrid(X, Y, Z, 1.0, limits)
+    grid = meshsearch.MeshGrid(X, Y, Z, 1.0, limits=limits)
     assert grid.n_cells[0] == 46341
     for _ in range(20):
         x, y, z = rng.uniform(0, length), rng.random(), rng.random()
@@ -926,7 +927,7 @@ def test_a_long_axis_past_the_32_bit_threshold():
         assert set(grid.close_objects(x, y, z, 40.0).tolist()) == brute_shell(
             x, y, z, X, Y, Z, alive, 40.0, 0.0)
 
-    ends = meshsearch.MeshGrid([0.25, length - 0.25], [0.5, 0.5], [0.5, 0.5], 1.0, limits)
+    ends = meshsearch.MeshGrid([0.25, length - 0.25], [0.5, 0.5], [0.5, 0.5], 1.0, limits=limits)
     assert ends.nearest_object(0) == 1
     assert ends.nearest_object(1) == 0
 
@@ -947,7 +948,7 @@ def test_an_object_at_exactly_rmax_beyond_a_rounded_face():
     """0.7 lands in cell 7 although the double lies just below 7 * 0.1; from
     the query, 0.7 - q is the double 0.3 exactly, so the object is at Rmax."""
     assert 0.7 - FACE_Q == 0.3
-    grid = meshsearch.MeshGrid([0.7], [0.0], [0.0], 0.1, FACE_BOX)
+    grid = meshsearch.MeshGrid([0.7], [0.0], [0.0], 0.1, limits=FACE_BOX)
     assert grid.get_cell_coords(0.7, 0.0, 0.0)[0] == 7
     assert grid.close_objects(FACE_Q, 0.0, 0.0, 0.3).tolist() == [0]
     assert grid.close_objects(FACE_Q, 0.0, 0.0, 0.3, 0.3).tolist() == [0]
@@ -955,7 +956,7 @@ def test_an_object_at_exactly_rmax_beyond_a_rounded_face():
     indices, offsets = grid.close_objects(np.array([FACE_Q]), np.zeros(1), np.zeros(1), 0.3)
     assert indices.tolist() == [0] and offsets.tolist() == [0, 1]
 
-    pair = meshsearch.MeshGrid([FACE_Q, 0.7], [0.0, 0.0], [0.0, 0.0], 0.1, FACE_BOX)
+    pair = meshsearch.MeshGrid([FACE_Q, 0.7], [0.0, 0.0], [0.0, 0.0], 0.1, limits=FACE_BOX)
     assert pair.close_objects(0, 0.3).tolist() == [1]
 
 
@@ -964,12 +965,12 @@ def test_the_nearest_object_beyond_a_rounded_face():
     shell 3 and nearer. A stop with no margin returns A."""
     a = float.fromhex("0x1.9999999999996p-4")
     assert (0.7 - FACE_Q) ** 2 < (FACE_Q - a) ** 2
-    grid = meshsearch.MeshGrid([a, 0.7], [0.0, 0.0], [0.0, 0.0], 0.1, FACE_BOX)
+    grid = meshsearch.MeshGrid([a, 0.7], [0.0, 0.0], [0.0, 0.0], 0.1, limits=FACE_BOX)
     assert grid.nearest_object(FACE_Q, 0.0, 0.0) == 1
     assert grid.nearest_object(np.array([FACE_Q]), np.zeros(1), np.zeros(1)).tolist() == [1]
     assert grid.nearest_objects(1, np.array([FACE_Q]), np.zeros(1), np.zeros(1)).tolist() == [[1]]
 
-    three = meshsearch.MeshGrid([a, 0.7, FACE_Q], [0.0] * 3, [0.0] * 3, 0.1, FACE_BOX)
+    three = meshsearch.MeshGrid([a, 0.7, FACE_Q], [0.0] * 3, [0.0] * 3, 0.1, limits=FACE_BOX)
     assert three.nearest_object(2) == 1
 
 
@@ -986,7 +987,7 @@ def test_an_object_at_exactly_rmin_in_an_overhanging_top_cell():
     q = [h("-0x1.74a7f8cac18bdp+26"), h("-0x1.74a7f8cac1867p+26"), h("-0x1.74a7f8cac18adp+26")]
     rmin = h("0x1.ab884ef702284p-22")
 
-    grid = meshsearch.MeshGrid([obj[0]], [obj[1]], [obj[2]], c, limits)
+    grid = meshsearch.MeshGrid([obj[0]], [obj[1]], [obj[2]], c, limits=limits)
     assert grid.close_objects(*q, INF, rmin).tolist() == [0]
     indices, _ = grid.close_objects(*(np.array([v]) for v in q), INF, rmin)
     assert indices.tolist() == [0]
@@ -997,7 +998,7 @@ def test_the_grown_box_contains_the_limits():
     lay inside the limits and a point on a limit was refused."""
     c, hi = 5.078493365404232, 3279294.892895552
     grid = meshsearch.MeshGrid([0.0, hi], [0.5, 0.5], [0.5, 0.5], c,
-                               [[0.0, hi], [0.0, 1.0], [0.0, 1.0]])
+                               limits=[[0.0, hi], [0.0, 1.0], [0.0, 1.0]])
     assert grid.lims[0][0] <= 0.0 and grid.lims[0][1] >= hi
     assert grid.nearest_object(0.0, 0.5, 0.5) == 0
     assert grid.nearest_object(hi, 0.5, 0.5) == 1
@@ -1005,7 +1006,7 @@ def test_the_grown_box_contains_the_limits():
 
 @pytest.mark.parametrize("build", [
     lambda: meshsearch.MeshGrid([0.0, 9e159], [0.0, 0.0], [0.0, 0.0], 1e159),
-    lambda: meshsearch.MeshGrid([], [], [], 1e153, [[-1e154, 1e154], [0.0, 0.0], [0.0, 0.0]]),
+    lambda: meshsearch.MeshGrid([], [], [], 1e153, limits=[[-1e154, 1e154], [0.0, 0.0], [0.0, 0.0]]),
 ])
 def test_a_box_whose_squared_diagonal_overflows_raises(build):
     raises_plain_error(build)
@@ -1013,7 +1014,7 @@ def test_a_box_whose_squared_diagonal_overflows_raises(build):
 
 def test_a_box_whose_squared_diagonal_is_representable_is_accepted():
     grid = meshsearch.MeshGrid([0.0, 6e153], [0.0, 6e153], [0.0, 6e153], 1e153,
-                               [[0.0, 6e153]] * 3)
+                               limits=[[0.0, 6e153]] * 3)
     assert grid.nearest_object(0) == 1
     assert grid.close_objects(0, INF).tolist() == [1]
 
@@ -1027,8 +1028,99 @@ def test_a_batched_nearest_objects_with_too_large_n_raises_before_allocating():
     """n_query * n would be far beyond any memory; the first query refuses n
     before the result array is sized, so this is the single-point error, not
     a MemoryError."""
-    grid = meshsearch.MeshGrid(*SMALL, 1.0, SMALL_BOX)
+    grid = meshsearch.MeshGrid(*SMALL, 1.0, limits=SMALL_BOX)
     q = np.full(1_000_000, 1.0)
     with pytest.raises(meshsearch.Error) as caught:
         grid.nearest_objects(2**32 - 1, q, q, q)
     assert "query 0" in str(caught.value)
+
+
+# --------------------------------------------------------------------------
+# periodic axes
+#
+# The geometry is checked exhaustively by the C++ suite; these check what the
+# binding adds: the keyword-only signature, the two forms of `periodic`, the
+# read-only property, the effective cellsize, and one brute-force comparison in
+# the minimum-image metric.
+
+
+def test_limits_and_periodic_are_keyword_only():
+    X, Y, Z = SMALL
+    with pytest.raises(TypeError):
+        meshsearch.MeshGrid(X, Y, Z, 1.0, SMALL_BOX)
+    with pytest.raises(TypeError):
+        meshsearch.MeshGrid(X, Y, Z, 1.0, SMALL_BOX, True)
+
+
+def test_periodic_defaults_to_false_and_is_a_tuple_of_bools():
+    grid = meshsearch.MeshGrid(*SMALL, 1.0)
+    assert grid.periodic == (False, False, False)
+    assert all(type(p) is bool for p in grid.periodic)
+
+
+@pytest.mark.parametrize("flag, expected", [
+    (True, (True, True, True)),
+    (False, (False, False, False)),
+    ((True, False, True), (True, False, True)),
+    ([False, True, False], (False, True, False)),
+    (np.array([True, True, False]), (True, True, False)),
+])
+def test_periodic_takes_a_bool_or_a_triple(flag, expected):
+    grid = meshsearch.MeshGrid(*SMALL, 1.0, limits=SMALL_BOX, periodic=flag)
+    assert grid.periodic == expected
+
+
+def test_periodic_is_read_only():
+    grid = meshsearch.MeshGrid(*SMALL, 1.0, limits=SMALL_BOX, periodic=True)
+    with pytest.raises(AttributeError):
+        grid.periodic = (False, False, False)
+
+
+@pytest.mark.parametrize("flag", [(True, False), (True,) * 4, "xyz", 1, None])
+def test_periodic_of_the_wrong_form_is_a_type_error(flag):
+    with pytest.raises(TypeError):
+        meshsearch.MeshGrid(*SMALL, 1.0, limits=SMALL_BOX, periodic=flag)
+
+
+def test_a_periodic_axis_without_limits_raises():
+    raises_plain_error(lambda: meshsearch.MeshGrid(*SMALL, 1.0, periodic=True))
+    raises_plain_error(lambda: meshsearch.MeshGrid(*SMALL, 1.0, periodic=(False, True, False)))
+
+
+def test_periodic_sides_must_be_multiples_of_the_shortest():
+    raises_plain_error(lambda: meshsearch.MeshGrid(
+        [0.5], [0.5], [0.5], 1.0, limits=[[0.0, 4.0], [0.0, 6.5], [0.0, 4.0]], periodic=True))
+
+
+def test_the_periodic_box_is_exactly_the_limits_and_the_cellsize_divides_it():
+    box = [[0.0, 1.0], [0.0, 1.0], [0.0, 2.0]]
+    grid = meshsearch.MeshGrid([0.5], [0.5], [0.5], 0.3, limits=box, periodic=True)
+    assert np.array_equal(grid.lims, np.array(box))
+    assert grid.cellsize <= 0.3
+    assert grid.n_cells == (4, 4, 8)
+    assert grid.cellsize == 0.25
+
+
+def test_periodic_queries_match_brute_force_in_the_minimum_image_metric():
+    rng = np.random.default_rng(5)
+    X, Y, Z = rng.random(400), rng.random(400), rng.random(400)
+    grid = meshsearch.MeshGrid(X, Y, Z, 0.15, limits=[[0.0, 1.0]] * 3, periodic=(True, False, True))
+
+    def image(d, periodic):
+        return np.where(periodic, d - np.where(d >= 0.5, 1.0, 0.0) + np.where(d < -0.5, 1.0, 0.0), d)
+
+    for _ in range(40):
+        q = rng.random(3)
+        d = np.sqrt(image(X - q[0], True) ** 2 + (Y - q[1]) ** 2 + image(Z - q[2], True) ** 2)
+        got = grid.nearest_objects(7, *q)
+        assert np.allclose(np.sort(d)[:7], d[got])
+        inside = grid.close_objects(*q, 0.3)
+        assert sorted(inside.tolist()) == sorted(np.nonzero(d <= 0.3)[0].tolist())
+        assert grid.close_objects(*q, np.inf).size == 400
+
+
+def test_the_periodic_example_runs():
+    import runpy
+    from pathlib import Path
+    path = Path(__file__).resolve().parent.parent / "examples" / "example_periodic.py"
+    runpy.run_path(str(path), run_name="__main__")

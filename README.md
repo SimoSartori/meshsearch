@@ -86,6 +86,12 @@ and coincident points. The rest check the guarantees the header states.
 // coordinates as three parallel vectors, and a cell side in the same unit
 meshsearch::MeshGrid grid(X, Y, Z, cellsize);
 
+// a box with limits, periodic in every direction
+meshsearch::MeshGrid::Options options;
+options.limits = std::array<std::array<double,2>,3>{{{0.,1.}, {0.,1.}, {0.,1.}}};
+options.periodic = {true, true, true};
+meshsearch::MeshGrid box(X, Y, Z, cellsize, options);
+
 unsigned int nearest = grid.nearestObject(0.5, 0.5, 0.5);
 std::vector<unsigned int> ten = grid.nearestObjects(10, 0.5, 0.5, 0.5);
 std::vector<unsigned int> shell = grid.closeObjects(0.5, 0.5, 0.5, 0.15, 0.10);
@@ -117,8 +123,9 @@ The constructor checks its input before allocating anything. It raises
 that are not finite or have `lo > hi`, for a coordinate that is not finite, for
 a cellsize so small that its reciprocal overflows a double, for a box so large
 that the square of its diagonal overflows a double (an extent of about 1e154
-along an axis), and for a grid too large to count: more than 2147483647 cells
-along an axis, or more than 4294967295 objects. Running out of memory is not
+along an axis), for a grid too large to count: more than 2147483647 cells
+along an axis, or more than 4294967295 objects, and for a periodic axis without
+limits or whose period is not an integer multiple of the shortest. Running out of memory is not
 translated: it is `std::bad_alloc` in C++ and `MemoryError` in Python, and an
 `addObject` that fails that way leaves the grid as it was.
 
@@ -160,9 +167,13 @@ import numpy as np
 import meshsearch
 
 grid = meshsearch.MeshGrid(x, y, z, cellsize)          # three arrays, one cell side
+box = meshsearch.MeshGrid(x, y, z, cellsize,           # limits and periodic are
+                          limits=[[0, 1]] * 3,         # keyword-only; periodic is
+                          periodic=True)               # a bool or one bool per axis
 
 len(grid)                                              # live object count
 grid.lims, grid.n_cells, grid.cellsize                 # read-only properties
+grid.periodic                                          # (False, False, False)
 
 grid.nearest_object(0.5, 0.5, 0.5)                     # an index
 grid.nearest_objects(10, 0.5, 0.5, 0.5)                # uint32 array, nearest first

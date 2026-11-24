@@ -27,7 +27,7 @@ cellsize = n ** (-1 / 3)
 # With no limits given, the box is fitted to the data and then grown
 # symmetrically to a whole number of cells, so grid.lims can be slightly wider
 # than the points. Pass limits explicitly to control it:
-#     meshsearch.MeshGrid(x, y, z, cellsize, [[0, 1], [0, 1], [0, 1]])
+#     meshsearch.MeshGrid(x, y, z, cellsize, limits=[[0, 1], [0, 1], [0, 1]])
 grid = meshsearch.MeshGrid(x, y, z, cellsize)
 
 print(f"{len(grid)} objects, {'x'.join(str(c) for c in grid.n_cells)} cells "

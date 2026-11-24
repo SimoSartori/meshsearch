@@ -6,8 +6,18 @@
 
 - C++: periodic axes. `MeshGrid::Options` holds the `limits` and a per-axis
   `periodic` flag, and `get_periodic()` returns the flags. On a periodic axis
-  distances are minimum-image distances and any radius is valid. The Python
-  interface follows in a later change.
+  distances are minimum-image distances and any radius is valid.
+- Python: `MeshGrid(x, y, z, cellsize, *, limits=None, periodic=False)`.
+  `periodic` is a bool for all three axes or a triple of bools. The read-only
+  property `periodic` returns a tuple of three bools. `cellsize` can be
+  slightly below the value requested when an axis is periodic.
+- Examples `examples/example_periodic.cpp` and `examples/example_periodic.py`,
+  and a section on periodic boxes in the guide.
+
+### Changed (Python interface)
+
+- **Breaking:** `limits` is keyword-only. `MeshGrid(x, y, z, cellsize, limits)`
+  raises `TypeError`; write `MeshGrid(x, y, z, cellsize, limits=limits)`.
 
 ### Changed (C++ interface)
 
