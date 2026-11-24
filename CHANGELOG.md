@@ -45,7 +45,37 @@
   `examples/example_batch.py`, and sections of the guide on batches, counts,
   container forms, `out=` and threads.
 
+- Python: `meshsearch.__version__`, from the version CMake generates for
+  `meshsearch/Version.h`.
+- Python: `repr(grid)`, and `copy.copy` and `copy.deepcopy` of a grid, which
+  give an independent grid answering every query as the original does, the
+  order within cells included.
+- Python: `meshsearch.Batch`, a named tuple `(indices, offsets)`, returned by
+  the batched `close_objects`.
+- Python: `contains(x, y, z)` and a batched `contains` over arrays of points,
+  and a batched `is_alive` over an array of indices, each returning a `bool`
+  array, with keyword-only `out=` on the batched forms (a C-contiguous `bool`
+  array of shape `(n_query,)`, with the rules of the other `out=`).
+
 ### Changed (Python interface)
+
+- **Breaking:** a negative object index raises `meshsearch.IndexError` in
+  every member taking an index, single and batched; a single one raised
+  `TypeError` before. An index of 2**32 or more raises it too. A negative `n`
+  raises `meshsearch.Error`, where it raised `TypeError`. `is_alive` answers
+  `False` for all of these, as for any index that is not in the grid.
+- Batched queries accept any array-like: a float64 or integer array is read
+  as it is, without a copy, whatever its strides, and anything else, a list
+  or tuple or a float32 array for instance, is converted by numpy first.
+  Before, only a float64 C-contiguous array was accepted for points. What
+  selects a batch is now an argument that has a length. Values that are not
+  real numbers (for indices, not integers) raise `TypeError`, and an array
+  that is not one-dimensional raises `meshsearch.Error`.
+- The batched `close_objects` returns `meshsearch.Batch`, a named tuple, in
+  place of a plain tuple. It unpacks, indexes and compares as the pair it was.
+- `lims` is still a 3x2 `float64` array, and `get_cell`, `get_cell_coords`
+  and `get_objects_in_cell` keep their names: the C++ type and renames of this
+  release need no change in Python.
 
 - **Breaking:** `limits` is keyword-only. `MeshGrid(x, y, z, cellsize, limits)`
   raises `TypeError`; write `MeshGrid(x, y, z, cellsize, limits=limits)`.

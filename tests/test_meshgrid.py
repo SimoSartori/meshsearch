@@ -6,6 +6,8 @@ boundary: the returned dtypes, the properties and len(), and the mapping of the
 two C++ exception types onto Python ones.
 """
 
+import copy
+
 import numpy as np
 import pytest
 
@@ -87,6 +89,7 @@ def grids(points):
 
 def test_module_surface():
     assert sorted(n for n in dir(meshsearch) if not n.startswith("_")) == [
+        "Batch",
         "Error",
         "IndexError",
         "MeshGrid",
@@ -100,6 +103,7 @@ def test_method_names_are_snake_case_with_no_aliases():
         "add_object",
         "cellsize",
         "close_objects",
+        "contains",
         "count_objects",
         "get_cell",
         "get_cell_coords",
@@ -1522,6 +1526,415 @@ def test_periodic_queries_match_brute_force_in_the_minimum_image_metric():
         inside = grid.close_objects(*q, 0.3)
         assert sorted(inside.tolist()) == sorted(np.nonzero(d <= 0.3)[0].tolist())
         assert grid.close_objects(*q, np.inf).size == 400
+
+
+# --------------------------------------------------------------------------
+# the 1.0 interface: version, repr, Batch, array-likes, negative arguments,
+# batched is_alive and contains, copies
+#
+# The header says every member taking an index raises on one that is out of
+# range or removed, and that errors are meshsearch.Error. A negative index is
+# out of range, so it is an IndexError and never wraps to a large unsigned
+# one; a negative count is invalid input, so it is an Error. is_alive is the
+# one member taking an index that does not raise.
+
+
+def test_version_is_the_one_cmake_generates():
+    import re
+    from pathlib import Path
+    assert isinstance(meshsearch.__version__, str)
+    cmake = Path(__file__).resolve().parent.parent / "CMakeLists.txt"
+    if not cmake.exists():
+        pytest.skip("run from outside the source tree")
+    declared = re.search(r"project\(meshsearch VERSION ([0-9.]+)", cmake.read_text()).group(1)
+    assert meshsearch.__version__ == declared
+
+
+def test_repr_names_the_grid(points):
+    X, Y, Z = points
+    grid = meshsearch.MeshGrid(X, Y, Z, 0.25, limits=BOX, periodic=(True, False, False))
+    grid.remove_object(0)
+    assert repr(grid) == (
+        f"MeshGrid(objects={len(X) - 1}, n_cells={grid.n_cells}, "
+        f"cellsize={grid.cellsize!r}, periodic=(True, False, False))")
+    assert str(grid) == repr(grid)
+
+
+def test_close_objects_returns_the_named_tuple(grids, batch_queries):
+    grid = grids["matched"]
+    qx, qy, qz = batch_queries
+    for found in (grid.close_objects(qx, qy, qz, 0.1),
+                  grid.close_objects(np.arange(5, dtype=np.uint32), 0.1)):
+        assert isinstance(found, meshsearch.Batch)
+        assert isinstance(found, tuple) and len(found) == 2
+        assert found._fields == ("indices", "offsets")
+        indices, offsets = found
+        assert found.indices is indices and found.offsets is offsets
+        assert indices.dtype == np.uint32 and offsets.dtype == np.int64
+    assert meshsearch.Batch.__module__ == "meshsearch"
+    import pickle
+    again = pickle.loads(pickle.dumps(found))
+    assert np.array_equal(again.indices, found.indices) and np.array_equal(again.offsets, found.offsets)
+
+
+@pytest.mark.parametrize("call", [
+    lambda g, i: g.nearest_object(i),
+    lambda g, i: g.nearest_objects(3, i),
+    lambda g, i: g.close_objects(i, 0.1),
+    lambda g, i: g.count_objects(i, 0.1),
+    lambda g, i: g.remove_object(i),
+])
+@pytest.mark.parametrize("bad", [-1, -(2 ** 31), 2 ** 32, 2 ** 70, -(2 ** 70), np.int64(-3)])
+def test_a_single_index_that_is_not_valid_raises_index_error(points, call, bad):
+    X, Y, Z = points
+    grid = meshsearch.MeshGrid(X, Y, Z, 0.1, limits=BOX)
+    with pytest.raises(meshsearch.IndexError):
+        call(grid, bad)
+    with pytest.raises(IndexError):
+        call(grid, bad)
+    assert len(grid) == len(X)
+
+
+def test_a_single_index_of_the_wrong_type_is_a_type_error(grids):
+    for bad in (1.0, "1", None):
+        with pytest.raises(TypeError):
+            grids["matched"].nearest_object(bad)
+        with pytest.raises(TypeError):
+            grids["matched"].count_objects(bad, 0.1)
+
+
+def test_a_negative_index_does_not_wrap_to_the_last_object(points):
+    """-1 is not the last object, as it would be for a list, and not 2**32 - 1."""
+    X, Y, Z = points
+    grid = meshsearch.MeshGrid(X, Y, Z, 0.1, limits=BOX)
+    assert grid.is_alive(len(X) - 1)
+    with pytest.raises(meshsearch.IndexError, match="-1"):
+        grid.nearest_object(-1)
+
+
+@pytest.mark.parametrize("bad", [-1, -(2 ** 40)])
+def test_a_negative_n_raises_error_in_every_form(grids, batch_queries, bad):
+    grid = grids["matched"]
+    qx, qy, qz = batch_queries
+    calls = [
+        lambda: grid.nearest_objects(bad, 0.5, 0.5, 0.5),
+        lambda: grid.nearest_objects(bad, 3),
+        lambda: grid.nearest_objects(bad, qx, qy, qz),
+        lambda: grid.nearest_objects(bad, np.arange(4, dtype=np.uint32)),
+        lambda: grid.nearest_objects(bad, qx[:0], qy[:0], qz[:0]),
+        lambda: grid.nearest_objects(bad, np.arange(0, dtype=np.uint32)),
+    ]
+    for call in calls:
+        with pytest.raises(meshsearch.Error) as caught:
+            call()
+        assert not isinstance(caught.value, meshsearch.IndexError)
+        assert "negative" in str(caught.value)
+
+
+def test_an_n_beyond_32_bits_raises_error(grids):
+    with pytest.raises(meshsearch.Error):
+        grids["matched"].nearest_objects(2 ** 40, 0.5, 0.5, 0.5)
+    with pytest.raises(TypeError):
+        grids["matched"].nearest_objects(2.0, 0.5, 0.5, 0.5)
+
+
+# Batch inputs accept any array-like. A float64 or integer array is read where
+# it is, a list or a float32 array is converted first, and either way the
+# answer is that of the float64 array of the same values.
+
+ARRAY_LIKES = [
+    ("list", lambda a: a.tolist()),
+    ("tuple", lambda a: tuple(a.tolist())),
+    ("float32-exact", lambda a: a.astype(np.float32).astype(np.float64).astype(np.float32)),
+    ("strided", lambda a: np.repeat(a, 2)[::2]),
+    ("negative-stride", lambda a: a[::-1].copy()[::-1]),
+    ("read-only", lambda a: a),
+]
+
+
+@pytest.mark.parametrize("name,convert", ARRAY_LIKES, ids=[n for n, _ in ARRAY_LIKES])
+def test_batch_coordinates_accept_any_array_like(points, name, convert):
+    X, Y, Z = points
+    grid = meshsearch.MeshGrid(X, Y, Z, 0.1, limits=BOX)
+    rng = np.random.default_rng(3)
+    base = rng.random((3, 60))
+    if name == "float32-exact":
+        base = base.astype(np.float32).astype(np.float64)
+    qx, qy, qz = (np.ascontiguousarray(row) for row in base)
+    if name == "read-only":
+        for row in (qx, qy, qz):
+            row.setflags(write=False)
+    cx, cy, cz = (convert(row) for row in (qx, qy, qz))
+
+    assert np.array_equal(grid.nearest_object(cx, cy, cz), grid.nearest_object(qx, qy, qz))
+    assert np.array_equal(grid.nearest_objects(4, cx, cy, cz), grid.nearest_objects(4, qx, qy, qz))
+    got, want = grid.close_objects(cx, cy, cz, 0.1), grid.close_objects(qx, qy, qz, 0.1)
+    assert np.array_equal(got.indices, want.indices) and np.array_equal(got.offsets, want.offsets)
+    assert np.array_equal(grid.count_objects(cx, cy, cz, 0.1), grid.count_objects(qx, qy, qz, 0.1))
+    assert np.array_equal(grid.contains(cx, cy, cz), grid.contains(qx, qy, qz))
+
+
+@pytest.mark.parametrize("dtype", [np.int8, np.uint8, np.int16, np.int32, np.int64, np.uint64])
+def test_batch_coordinates_accept_integer_arrays(dtype):
+    grid = meshsearch.MeshGrid([0.0, 1.0, 2.0, 3.0], [0.0] * 4, [0.0] * 4, 1.0, limits=[[0, 4], [-1, 1], [-1, 1]])
+    q = np.array([0, 1, 3], dtype=dtype)
+    zero = np.zeros(3, dtype=dtype)
+    assert grid.nearest_object(q, zero, zero).tolist() == [0, 1, 3]
+    assert grid.count_objects(q, zero, zero, 1).tolist() == [2, 3, 2]
+    assert grid.contains(q, zero, zero).tolist() == [True, True, True]
+
+
+def test_batch_indices_accept_lists_and_tuples(thinned):
+    grid = thinned["matched"]
+    wanted = [3, 1, 4, 10]
+    for given in (wanted, tuple(wanted), np.array(wanted), range(3, 5)):
+        listed = list(given)
+        assert grid.nearest_object(given).tolist() == [grid.nearest_object(i) for i in listed]
+        assert np.array_equal(grid.nearest_objects(2, given), [grid.nearest_objects(2, i) for i in listed])
+        assert grid.count_objects(given, 0.1).tolist() == [grid.count_objects(i, 0.1) for i in listed]
+        assert grid.is_alive(given).tolist() == [grid.is_alive(i) for i in listed]
+
+
+def test_empty_batches_of_any_kind(grids):
+    grid = grids["matched"]
+    assert grid.nearest_object([], [], []).shape == (0,)
+    assert grid.nearest_object([]).shape == (0,)
+    assert grid.nearest_objects(3, []).shape == (0, 3)
+    assert grid.count_objects([], 0.1).shape == (0,)
+    assert grid.is_alive([]).shape == (0,)
+    assert grid.contains([], [], []).shape == (0,)
+    found = grid.close_objects([], 0.1)
+    assert found.indices.shape == (0,) and found.offsets.tolist() == [0]
+
+
+def test_batch_inputs_of_the_wrong_kind_or_shape_raise(grids):
+    grid = grids["matched"]
+    with pytest.raises(TypeError):
+        grid.nearest_object(["a", "b"], ["a", "b"], ["a", "b"])
+    with pytest.raises(TypeError):
+        grid.nearest_object(np.array([1 + 2j]), np.array([0.5]), np.array([0.5]))
+    with pytest.raises(TypeError):
+        grid.nearest_object(np.array([True, False]))
+    with pytest.raises(meshsearch.Error, match="one-dimensional"):
+        grid.nearest_object(np.zeros((2, 2)), np.zeros((2, 2)), np.zeros((2, 2)))
+    with pytest.raises(meshsearch.Error, match="one-dimensional"):
+        grid.nearest_object(np.zeros((2, 2), dtype=np.int64))
+    with pytest.raises(meshsearch.Error, match="differ in length"):
+        grid.nearest_object([0.5, 0.5], [0.5], [0.5])
+
+
+def test_batch_indices_from_a_list_are_range_checked(thinned):
+    grid = thinned["matched"]
+    with pytest.raises(meshsearch.IndexError, match="query 1"):
+        grid.nearest_object([1, -1])
+    with pytest.raises(meshsearch.IndexError, match="query 1"):
+        grid.nearest_object([1, 2 ** 40])
+    with pytest.raises(meshsearch.IndexError, match="query 1"):
+        grid.close_objects([1, 9], 0.1)
+
+
+def test_a_scalar_is_still_not_a_batch(grids):
+    grid = grids["matched"]
+    assert isinstance(grid.nearest_object(0.5, 0.5, 0.5), int)
+    assert isinstance(grid.count_objects(0.5, 0.5, 0.5, 0.1), int)
+    assert isinstance(grid.nearest_object(np.float64(0.5), np.float64(0.5), np.float64(0.5)), int)
+    assert isinstance(grid.nearest_object(np.int64(3)), int)
+    assert grid.nearest_objects(3, 0.5, 0.5, 0.5).shape == (3,)
+    assert grid.close_objects(0.5, 0.5, 0.5, 0.1).ndim == 1
+    assert grid.close_objects(3, 0.1).ndim == 1
+    assert isinstance(grid.contains(0.5, 0.5, 0.5), bool)
+    assert isinstance(grid.is_alive(3), bool)
+    assert grid.nearest_object([0.5], [0.5], [0.5]).shape == (1,)
+    assert grid.nearest_object([3]).shape == (1,)
+
+
+def test_is_alive_batch_matches_the_scalar_and_never_raises(thinned):
+    grid = thinned["matched"]
+    n = 2000
+    indices = np.concatenate([np.arange(0, n + 5), [-1, -(2 ** 40), 2 ** 32, 2 ** 33, 4294967295]])
+    got = grid.is_alive(indices)
+    assert got.dtype == np.bool_ and got.shape == indices.shape
+    assert got.tolist() == [grid.is_alive(int(i)) for i in indices]
+    assert got[:n].sum() == len(grid) and not got[n:].any()
+    assert grid.is_alive(np.array([5, 6], dtype=np.uint8)).tolist() == [True, True]
+    assert grid.is_alive(np.array([0, 9, 18], dtype=np.int8)).tolist() == [False] * 3
+    assert grid.is_alive(-1) is False and grid.is_alive(2 ** 70) is False
+    with pytest.raises(TypeError):
+        grid.is_alive(np.array([1.0]))
+    with pytest.raises(TypeError):
+        grid.is_alive(1.0)
+
+
+def test_is_alive_follows_removal_and_addition(points):
+    X, Y, Z = points
+    grid = meshsearch.MeshGrid(X[:10], Y[:10], Z[:10], 0.2, limits=BOX)
+    grid.remove_object(2)
+    new = grid.add_object(0.5, 0.5, 0.5)
+    assert grid.is_alive(np.arange(12)).tolist() == [i != 2 and i != 11 or i == new for i in range(12)]
+
+
+def test_contains_matches_whether_a_query_is_accepted(points):
+    X, Y, Z = points
+    grid = meshsearch.MeshGrid(X, Y, Z, 0.2, limits=BOX)
+    rng = np.random.default_rng(11)
+    q = rng.uniform(-0.5, 1.5, size=(500, 3))
+    lo, hi = grid.lims[:, 0], grid.lims[:, 1]
+    edge = np.array([[lo[0], lo[1], lo[2]], [hi[0], hi[1], hi[2]], [np.nan, 0.5, 0.5],
+                     [0.5, np.inf, 0.5], [0.5, 0.5, -np.inf], [hi[0] + 1e-9, 0.5, 0.5]])
+    q = np.vstack([q, edge])
+
+    def accepted(p):
+        try:
+            grid.nearest_object(*p)
+            return True
+        except meshsearch.Error:
+            return False
+
+    got = grid.contains(q[:, 0].copy(), q[:, 1].copy(), q[:, 2].copy())
+    assert got.dtype == np.bool_
+    assert got.tolist() == [accepted(p) for p in q] == [grid.contains(*p) for p in q]
+    assert 0 < got.sum() < len(q)
+
+
+def test_contains_and_is_alive_out(points):
+    X, Y, Z = points
+    grid = meshsearch.MeshGrid(X, Y, Z, 0.2, limits=BOX)
+    rng = np.random.default_rng(12)
+    q = rng.uniform(-0.5, 1.5, size=(40, 3))
+    out = np.empty(40, dtype=np.bool_)
+    got = grid.contains(q[:, 0].copy(), q[:, 1].copy(), q[:, 2].copy(), out=out)
+    assert got is out
+    assert out.tolist() == [grid.contains(*p) for p in q]
+
+    out[:] = True
+    indices = np.arange(-20, 20)
+    assert grid.is_alive(indices, out=out) is out
+    assert out.tolist() == [grid.is_alive(int(i)) for i in indices]
+
+    for call in (lambda o: grid.contains(q[:, 0].copy(), q[:, 1].copy(), q[:, 2].copy(), out=o),
+                 lambda o: grid.is_alive(indices, out=o)):
+        with pytest.raises(TypeError):
+            call(np.empty(40, dtype=np.uint8))
+        with pytest.raises(TypeError):
+            call([True] * 40)
+        with pytest.raises(meshsearch.Error):
+            call(np.empty(41, dtype=np.bool_))
+        with pytest.raises(meshsearch.Error):
+            call(np.empty(80, dtype=np.bool_)[::2])
+        read_only = np.empty(40, dtype=np.bool_)
+        read_only.setflags(write=False)
+        with pytest.raises(TypeError):
+            call(read_only)
+
+
+def test_contains_arrays_of_unequal_length_raise(grids):
+    with pytest.raises(meshsearch.Error, match="differ in length"):
+        grids["matched"].contains([0.5, 0.5], [0.5], [0.5])
+
+
+# Copies. The copy is independent of the original and answers every query as it
+# does, the order within a cell included: that order is unspecified by the
+# header, but a copy is the same grid, so it must not change. The comparison
+# below covers every query kind and is written to take any two grids.
+
+
+def same_answers(a, b, n_objects):
+    rng = np.random.default_rng(77)
+    q = rng.uniform(-0.1, 1.1, size=(120, 3))
+    qx, qy, qz = (np.ascontiguousarray(q[:, k]) for k in range(3))
+    inside = [tuple(p) for p in q if a.contains(*p)]
+    assert inside
+
+    assert len(a) == len(b) and a.cellsize == b.cellsize and a.n_cells == b.n_cells
+    assert a.periodic == b.periodic and np.array_equal(a.lims, b.lims)
+    assert repr(a) == repr(b)
+
+    objects = np.arange(n_objects, dtype=np.int64)
+    assert np.array_equal(a.is_alive(objects), b.is_alive(objects))
+    assert np.array_equal(a.contains(qx, qy, qz), b.contains(qx, qy, qz))
+    alive = [int(i) for i in objects[a.is_alive(objects)]]
+    live = np.array(alive, dtype=np.uint32)
+
+    for point in inside:
+        assert a.nearest_object(*point) == b.nearest_object(*point)
+        assert a.get_cell(*point) == b.get_cell(*point)
+        assert a.get_cell_coords(*point) == b.get_cell_coords(*point)
+        assert a.get_objects_in_cell(*point).tolist() == b.get_objects_in_cell(*point).tolist()
+        for n in (1, 5, 40):
+            assert a.nearest_objects(n, *point).tolist() == b.nearest_objects(n, *point).tolist()
+        for rmax, rmin in ((0.05, 0.0), (0.2, 0.1), (np.inf, 0.0) if any(a.periodic) else (0.5, 0.0)):
+            assert a.close_objects(*point, rmax, rmin).tolist() == b.close_objects(*point, rmax, rmin).tolist()
+            assert a.count_objects(*point, rmax, rmin) == b.count_objects(*point, rmax, rmin)
+
+    for index in alive[::7]:
+        assert a.nearest_object(index) == b.nearest_object(index)
+        assert a.nearest_objects(6, index).tolist() == b.nearest_objects(6, index).tolist()
+        assert a.close_objects(index, 0.2, 0.05).tolist() == b.close_objects(index, 0.2, 0.05).tolist()
+        assert a.count_objects(index, 0.2, 0.05) == b.count_objects(index, 0.2, 0.05)
+
+    ix, iy, iz = (np.ascontiguousarray([p[k] for p in inside]) for k in range(3))
+    assert np.array_equal(a.nearest_object(ix, iy, iz), b.nearest_object(ix, iy, iz))
+    assert np.array_equal(a.nearest_objects(9, ix, iy, iz), b.nearest_objects(9, ix, iy, iz))
+    assert np.array_equal(a.nearest_object(live), b.nearest_object(live))
+    assert np.array_equal(a.nearest_objects(9, live), b.nearest_objects(9, live))
+    for got, want in ((a.close_objects(ix, iy, iz, 0.2, 0.05), b.close_objects(ix, iy, iz, 0.2, 0.05)),
+                      (a.close_objects(live, 0.2, 0.05), b.close_objects(live, 0.2, 0.05))):
+        assert np.array_equal(got.indices, want.indices) and np.array_equal(got.offsets, want.offsets)
+    assert np.array_equal(a.count_objects(ix, iy, iz, 0.2), b.count_objects(ix, iy, iz, 0.2))
+    assert np.array_equal(a.count_objects(live, 0.2), b.count_objects(live, 0.2))
+
+
+def worked_grid(**options):
+    """A grid with removed and added objects, some added into cells that were
+    full, so that its cells hold objects in more than one stretch."""
+    X, Y, Z = cloud(1500, seed=5)
+    grid = meshsearch.MeshGrid(X, Y, Z, 0.12, limits=BOX, **options)
+    for index in range(2, 1500, 5):
+        grid.remove_object(index)
+    rng = np.random.default_rng(6)
+    for point in rng.random((600, 3)):
+        grid.add_object(*point)
+    for index in range(1, 2100, 11):
+        if grid.is_alive(index):
+            grid.remove_object(index)
+    return grid
+
+
+@pytest.mark.parametrize("options", [{}, {"periodic": (True, False, True)}], ids=["plain", "periodic"])
+@pytest.mark.parametrize("make", [copy.copy, copy.deepcopy, lambda g: copy.deepcopy({"g": g})["g"]],
+                         ids=["copy", "deepcopy", "deepcopy-nested"])
+def test_a_copy_answers_every_query_as_the_original_does(options, make):
+    grid = worked_grid(**options)
+    duplicate = make(grid)
+    assert duplicate is not grid and type(duplicate) is meshsearch.MeshGrid
+    same_answers(grid, duplicate, 2100)
+
+
+def test_a_copy_is_independent_of_the_original():
+    grid = worked_grid()
+    reference = worked_grid()
+    duplicate = copy.copy(grid)
+
+    new = duplicate.add_object(0.5, 0.5, 0.5)
+    assert len(duplicate) == len(grid) + 1 and not grid.is_alive(new)
+    duplicate.remove_object(0)
+    duplicate.remove_object(3)
+    assert len(duplicate) == len(grid) - 1
+    same_answers(grid, reference, 2100)
+
+    again = copy.deepcopy(grid)
+    grid.add_object(0.1, 0.2, 0.3)
+    grid.remove_object(1500 + 1)
+    assert len(again) == len(reference)
+    same_answers(again, reference, 2100)
+
+
+def test_a_copy_of_a_grid_keeps_issuing_the_next_index_the_original_would():
+    grid = worked_grid()
+    duplicate = copy.deepcopy(grid)
+    assert duplicate.add_object(0.4, 0.4, 0.4) == grid.add_object(0.4, 0.4, 0.4)
+    assert duplicate.add_object(0.6, 0.4, 0.4) == grid.add_object(0.6, 0.4, 0.4)
+    same_answers(grid, duplicate, 2200)
 
 
 def test_the_periodic_example_runs():

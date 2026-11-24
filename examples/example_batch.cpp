@@ -94,6 +94,19 @@ int main ()
   printf("neighbours of objects 0, 1, 2: %llu %llu %llu\n",
          (unsigned long long)around[0], (unsigned long long)around[1], (unsigned long long)around[2]);
 
+  // contains and isAlive answer for many points or indices at once without
+  // raising: one std::uint8_t, 0 or 1, per entry. contains is whether a query
+  // at the point would be accepted, that is, whether it lies in the box, so a
+  // batch can be screened before it is asked. isAlive is the one member taking
+  // an index that does not raise: an index out of range or removed is 0.
+  std::vector<double> screened = QX;
+  screened[99] = 5.;
+  const std::vector<std::uint8_t> accepted = grid.contains(screened, QY, QZ);
+  const std::vector<unsigned int> asked = {0, 1, (unsigned int)n};
+  const std::vector<std::uint8_t> alive = grid.isAlive(asked);
+  printf("query 99 lies in the box: %d; objects 0, 1 and n are alive: %d %d %d\n",
+         accepted[99], alive[0], alive[1], alive[2]);
+
   // A batch raises Error if any query does, for example a point outside the
   // box. Nothing partial is returned, and a container passed in is then left
   // with unspecified content.
@@ -108,5 +121,5 @@ int main ()
     printf("a query point outside the box raised Error: %s\n", e.what());
   }
 
-  return raised && last-first == within[12] ? 0 : 1;
+  return raised && last-first == within[12] && !accepted[99] && accepted[98] && alive[0] && !alive[2] ? 0 : 1;
 }
