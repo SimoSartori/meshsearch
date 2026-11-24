@@ -7,7 +7,7 @@ without the build saying so.
 
     pip install -r docs/requirements.txt
     pip install .
-    sphinx-build -W --keep-going docs docs/_build/html
+    sphinx-build -W -n --keep-going docs docs/_build/html
 """
 
 import pathlib
@@ -48,6 +48,19 @@ intersphinx_mapping = {
 
 myst_enable_extensions = ["colon_fence", "attrs_block"]
 myst_heading_anchors = 3
+
+# With -n every unresolved reference is a warning. These three names are the
+# ones Sphinx cannot resolve and that are not errors in the documentation:
+# Breathe writes the standard library's size_t and the namespace of the
+# signatures as cpp identifiers with no target of their own, and nanobind
+# spells the numpy array type in its signatures with a shape and a dtype, which
+# is no importable name.
+nitpicky = True
+nitpick_ignore = [
+    ("cpp:identifier", "size_t"),
+    ("cpp:identifier", "meshsearch"),
+    ("py:class", "numpy.ndarray[dtype=uint32, shape=(*)]"),
+]
 
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "doxygen", "requirements.txt", "README.md"]

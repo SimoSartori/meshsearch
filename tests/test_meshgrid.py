@@ -2037,3 +2037,10 @@ def test_the_batch_example_runs():
     from pathlib import Path
     path = Path(__file__).resolve().parent.parent / "examples" / "example_batch.py"
     runpy.run_path(str(path), run_name="__main__")
+
+
+def test_the_tour_example_runs():
+    import runpy
+    from pathlib import Path
+    path = Path(__file__).resolve().parent.parent / "examples" / "example.py"
+    runpy.run_path(str(path), run_name="__main__")

@@ -107,7 +107,10 @@ jobs:
       - name: Test
         working-directory: ${{ runner.temp }}
         run: >-
-          "$RUNNER_TEMP/venv/bin/python" -m pytest "$GITHUB_WORKSPACE/tests/test_meshgrid.py"
+          "$RUNNER_TEMP/venv/bin/python" -m pytest
+          "$GITHUB_WORKSPACE/tests/test_meshgrid.py"
+          "$GITHUB_WORKSPACE/tests/test_readme.py"
+          "$GITHUB_WORKSPACE/tests/test_determinism.py"
           -p no:cacheprovider -rs
 
       - name: The GIL stays off after import

@@ -12,7 +12,8 @@ PROJECT=$1
 cd "$(mktemp -d)"
 
 python -c "import meshsearch; print(meshsearch.__file__)"
-pytest "$PROJECT/tests/test_meshgrid.py" -p no:cacheprovider -rs
+pytest "$PROJECT/tests/test_meshgrid.py" "$PROJECT/tests/test_readme.py" \
+  "$PROJECT/tests/test_determinism.py" -p no:cacheprovider -rs
 
 if python -c "import sys; sys.exit(0 if hasattr(sys, '_is_gil_enabled') and not sys._is_gil_enabled() else 1)"; then
   echo "free-threaded build: GIL stays off"
