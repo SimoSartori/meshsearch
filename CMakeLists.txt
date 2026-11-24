@@ -83,6 +83,12 @@ if (MESHSEARCH_BUILD_TESTS)
   target_compile_options(test_meshgrid PRIVATE ${MESHSEARCH_PRIVATE_OPTIONS})
 
   add_test(NAME meshgrid COMMAND test_meshgrid)
+
+  add_executable(test_periodic tests/test_periodic.cpp)
+  target_link_libraries(test_periodic PRIVATE meshsearch)
+  target_compile_options(test_periodic PRIVATE ${MESHSEARCH_PRIVATE_OPTIONS})
+
+  add_test(NAME periodic COMMAND test_periodic)
 endif()
 
 if (MESHSEARCH_BUILD_PYTHON)

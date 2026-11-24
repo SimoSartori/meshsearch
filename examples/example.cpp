@@ -38,7 +38,9 @@ int main ()
   // With no limits given, the box is fitted to the data and then grown
   // symmetrically to a whole number of cells, so get_lims() can be slightly
   // wider than the points. Pass limits explicitly to control it:
-  //   MeshGrid grid(X, Y, Z, cellsize, {{0.,1.}, {0.,1.}, {0.,1.}});
+  //   meshsearch::MeshGrid::Options options;
+  //   options.limits = std::array<std::array<double,2>,3>{{{0.,1.}, {0.,1.}, {0.,1.}}};
+  //   MeshGrid grid(X, Y, Z, cellsize, options);
   meshsearch::MeshGrid grid(X, Y, Z, cellsize);
 
   const auto lims = grid.get_lims();

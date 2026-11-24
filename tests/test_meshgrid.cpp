@@ -11,6 +11,7 @@
 #include "meshsearch/MeshGrid.h"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <cstdio>
@@ -21,6 +22,24 @@
 using meshsearch::Error;
 using meshsearch::IndexError;
 using meshsearch::MeshGrid;
+
+namespace {
+
+  // The box of a 3x2 vector of vectors, as options.
+  MeshGrid::Options boxOf (const std::vector<std::vector<double>>& lims)
+  {
+    assert(lims.size() == 3);
+    MeshGrid::Options options;
+    std::array<std::array<double,2>,3> limits;
+    for (int a=0; a<3; ++a) {
+      assert(lims[a].size() == 2);
+      limits[a] = {lims[a][0], lims[a][1]};
+    }
+    options.limits = limits;
+    return options;
+  }
+
+}
 
 #define ASSERT_THROWS(expr)                                 \
   do {                                                      \
@@ -203,7 +222,7 @@ namespace {
     const std::vector<double> Y = {0.5, 2.5, 9.5};
     const std::vector<double> Z = {0.5, 2.5, 9.5};
 
-    const MeshGrid grid(X, Y, Z, 1., {{0., 10.}, {0., 10.}, {0., 10.}});
+    const MeshGrid grid(X, Y, Z, 1., boxOf({{0., 10.}, {0., 10.}, {0., 10.}}));
 
     assert(grid.get_nObjects() == 3);
     assert(grid.get_cellsize() == 1.);
@@ -248,7 +267,7 @@ namespace {
     ASSERT_THROWS(empty.closeObjects(0., 0., 0., 1.));
     ASSERT_THROWS(empty.addObject(0., 0., 0.));
 
-    const MeshGrid noObjects({}, {}, {}, 1., {{0., 4.}, {0., 4.}, {0., 4.}});
+    const MeshGrid noObjects({}, {}, {}, 1., boxOf({{0., 4.}, {0., 4.}, {0., 4.}}));
     assert(noObjects.get_nObjects() == 0);
     assert(noObjects.get_ObjectsInCell(1., 1., 1.).empty());
     assert(noObjects.nearestObjects(0, 1., 1., 1.).empty());
@@ -264,7 +283,7 @@ namespace {
   void testCells ()
   {
     const std::vector<double> X = {0.5}, Y = {0.5}, Z = {0.5};
-    const MeshGrid grid(X, Y, Z, 1., {{0., 10.}, {0., 4.}, {0., 2.}});
+    const MeshGrid grid(X, Y, Z, 1., boxOf({{0., 10.}, {0., 4.}, {0., 2.}}));
 
     assert(grid.get_nCells()[0] == 10);
     assert(grid.get_nCells()[1] == 4);
@@ -319,7 +338,7 @@ namespace {
 
     // Same thing through addObject and a query: an object added exactly on the
     // far corner of the box must land in the last cell and be findable there.
-    MeshGrid onFace({0.}, {0.}, {0.}, 1., {{0., 3.}, {0., 3.}, {0., 3.}});
+    MeshGrid onFace({0.}, {0.}, {0.}, 1., boxOf({{0., 3.}, {0., 3.}, {0., 3.}}));
     const unsigned int corner = onFace.addObject(3., 3., 3.);
     const auto cell = onFace.get_ObjectsInCell(3., 3., 3.);
     assert(cell.size() == 1 && cell[0] == corner);
@@ -342,20 +361,18 @@ namespace {
     const std::vector<double> Z = {1., 2., 3.};
     const std::vector<std::vector<double>> lims = {{0., 4.}, {0., 4.}, {0., 4.}};
 
-    ASSERT_THROWS(MeshGrid({1., 2.}, Y, Z, 1., lims));
-    ASSERT_THROWS(MeshGrid(X, {1., 2.}, Z, 1., lims));
-    ASSERT_THROWS(MeshGrid(X, Y, {1., 2.}, 1., lims));
-    ASSERT_THROWS(MeshGrid(X, Y, Z, 0., lims));
-    ASSERT_THROWS(MeshGrid(X, Y, Z, -1., lims));
-    ASSERT_THROWS(MeshGrid(X, Y, Z, 1., {{0., 4.}, {0., 4.}}));
-    ASSERT_THROWS(MeshGrid(X, Y, Z, 1., {{0., 4.}, {0., 4.}, {0.}}));
-    ASSERT_THROWS(MeshGrid(X, Y, Z, 1., {{0., 4.}, {0., 4.}, {0., 4.}, {0., 4.}}));
-    ASSERT_THROWS(MeshGrid(X, Y, Z, 1., {{2., 4.}, {0., 4.}, {0., 4.}}));
-    ASSERT_THROWS(MeshGrid(X, Y, Z, 1., {{0., 4.}, {0., 2.5}, {0., 4.}}));
-    ASSERT_THROWS(MeshGrid(X, Y, Z, 1., {{0., 4.}, {0., 4.}, {1.5, 4.}}));
-    ASSERT_OK(MeshGrid(X, Y, Z, 1., {{1., 3.}, {1., 3.}, {1., 3.}}));
+    ASSERT_THROWS(MeshGrid({1., 2.}, Y, Z, 1., boxOf(lims)));
+    ASSERT_THROWS(MeshGrid(X, {1., 2.}, Z, 1., boxOf(lims)));
+    ASSERT_THROWS(MeshGrid(X, Y, {1., 2.}, 1., boxOf(lims)));
+    ASSERT_THROWS(MeshGrid(X, Y, Z, 0., boxOf(lims)));
+    ASSERT_THROWS(MeshGrid(X, Y, Z, -1., boxOf(lims)));
+    // That the limits are 3x2 is now a property of their type, so only their values are checked.
+    ASSERT_THROWS(MeshGrid(X, Y, Z, 1., boxOf({{2., 4.}, {0., 4.}, {0., 4.}})));
+    ASSERT_THROWS(MeshGrid(X, Y, Z, 1., boxOf({{0., 4.}, {0., 2.5}, {0., 4.}})));
+    ASSERT_THROWS(MeshGrid(X, Y, Z, 1., boxOf({{0., 4.}, {0., 4.}, {1.5, 4.}})));
+    ASSERT_OK(MeshGrid(X, Y, Z, 1., boxOf({{1., 3.}, {1., 3.}, {1., 3.}})));
 
-    MeshGrid grid(X, Y, Z, 1., lims);
+    MeshGrid grid(X, Y, Z, 1., boxOf(lims));
     const MeshGrid& cgrid = grid;
 
     const double out = 5.;
@@ -425,7 +442,7 @@ namespace {
     ASSERT_THROWS(cgrid.nearestObject(inf_radius, 1., 1.));
     ASSERT_THROWS(grid.addObject(1., -inf_radius, 1.));
 
-    MeshGrid single({1.}, {1.}, {1.}, 1., lims);
+    MeshGrid single({1.}, {1.}, {1.}, 1., boxOf(lims));
     ASSERT_THROWS_PLAIN(single.nearestObject(0u));
     assert(single.nearestObject(2., 2., 2.) == 0);
     single.removeObject(0);
@@ -447,7 +464,7 @@ namespace {
     ASSERT_THROWS_INDEX(cgrid.closeObjects(3u, 1., 2.));
     ASSERT_THROWS_INDEX(cgrid.nearestObject(std::numeric_limits<unsigned int>::max()));
 
-    MeshGrid removed({1., 2.}, {1., 2.}, {1., 2.}, 1., lims);
+    MeshGrid removed({1., 2.}, {1., 2.}, {1., 2.}, 1., boxOf(lims));
     removed.removeObject(1);
     ASSERT_THROWS_INDEX(removed.nearestObjects(50, 1u));
     ASSERT_THROWS_INDEX(removed.closeObjects(1u, -3.));
@@ -468,7 +485,7 @@ namespace {
     Cloud cloud = uniformCloud(400, gen);
     const std::vector<std::vector<double>> lims = {{0., 1.}, {0., 1.}, {0., 1.}};
 
-    MeshGrid grid(cloud.X, cloud.Y, cloud.Z, 0.12, lims);
+    MeshGrid grid(cloud.X, cloud.Y, cloud.Z, 0.12, boxOf(lims));
     assert(grid.get_nObjects() == 400);
 
     std::vector<unsigned int> removed;
@@ -614,7 +631,7 @@ namespace {
     const std::vector<std::vector<double>> lims = {{0., 4.}, {0., 4.}, {0., 4.}};
 
     for (const double cellsize : {inf, -inf, nan, 0., -1.}) {
-      ASSERT_THROWS_PLAIN(MeshGrid(X, Y, Z, cellsize, lims));
+      ASSERT_THROWS_PLAIN(MeshGrid(X, Y, Z, cellsize, boxOf(lims)));
       ASSERT_THROWS_PLAIN(MeshGrid(X, Y, Z, cellsize));
     }
 
@@ -623,27 +640,27 @@ namespace {
         for (const double bad : {nan, inf, -inf}) {
           auto badLims = lims;
           badLims[axis][end] = bad;
-          ASSERT_THROWS_PLAIN(MeshGrid(X, Y, Z, 1., badLims));
-          ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, 1., badLims));
+          ASSERT_THROWS_PLAIN(MeshGrid(X, Y, Z, 1., boxOf(badLims)));
+          ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, 1., boxOf(badLims)));
         }
 
     for (int axis=0; axis<3; ++axis) {
       auto inverted = lims;
       inverted[axis] = {4., 0.};
-      ASSERT_THROWS_PLAIN(MeshGrid(X, Y, Z, 1., inverted));
-      ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, 1., inverted));
+      ASSERT_THROWS_PLAIN(MeshGrid(X, Y, Z, 1., boxOf(inverted)));
+      ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, 1., boxOf(inverted)));
     }
 
     for (int axis=0; axis<3; ++axis)
       for (const double bad : {nan, inf, -inf}) {
         std::vector<std::vector<double>> coords = {X, Y, Z};
         coords[axis][1] = bad;
-        ASSERT_THROWS_PLAIN(MeshGrid(coords[0], coords[1], coords[2], 1., lims));
+        ASSERT_THROWS_PLAIN(MeshGrid(coords[0], coords[1], coords[2], 1., boxOf(lims)));
         ASSERT_THROWS_PLAIN(MeshGrid(coords[0], coords[1], coords[2], 1.));
       }
 
-    ASSERT_OK(MeshGrid(X, Y, Z, 1., {{0., 4.}, {0., 4.}, {0., 4.}}));
-    ASSERT_OK(MeshGrid({}, {}, {}, 1., {{2., 2.}, {0., 4.}, {0., 4.}}));
+    ASSERT_OK(MeshGrid(X, Y, Z, 1., boxOf({{0., 4.}, {0., 4.}, {0., 4.}})));
+    ASSERT_OK(MeshGrid({}, {}, {}, 1., boxOf({{2., 2.}, {0., 4.}, {0., 4.}})));
 
     // A box whose squared diagonal overflows a double is refused, since a
     // distance inside it could then overflow too. The first case is two
@@ -651,14 +668,14 @@ namespace {
     // object was found. A box of 6e153 per side, grown to at most 7e153,
     // stays representable and is accepted.
     ASSERT_THROWS_PLAIN(MeshGrid({0., 9.e159}, {0., 0.}, {0., 0.}, 1.e159));
-    ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, 1.e153, {{-1.e154, 1.e154}, {0., 0.}, {0., 0.}}));
-    ASSERT_OK(MeshGrid({}, {}, {}, 1.e153, {{0., 6.e153}, {0., 6.e153}, {0., 6.e153}}));
+    ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, 1.e153, boxOf({{-1.e154, 1.e154}, {0., 0.}, {0., 0.}})));
+    ASSERT_OK(MeshGrid({}, {}, {}, 1.e153, boxOf({{0., 6.e153}, {0., 6.e153}, {0., 6.e153}})));
 
     // A cellsize whose reciprocal overflows is refused. Only a box of zero
     // extent can have so few cells that such a cellsize passes the count
     // limits, so that is the case to check.
     ASSERT_THROWS_PLAIN(MeshGrid({0.}, {0.}, {0.}, 1.e-310));
-    ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, std::numeric_limits<double>::denorm_min(), {{1., 1.}, {1., 1.}, {1., 1.}}));
+    ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, std::numeric_limits<double>::denorm_min(), boxOf({{1., 1.}, {1., 1.}, {1., 1.}})));
     ASSERT_OK(MeshGrid({0.}, {0.}, {0.}, 1.e-300));
 
     printf("  constructor input validation: ok\n");
@@ -690,7 +707,7 @@ namespace {
         {{0., 1.}, flatAxes == 2 ? std::vector<double>{level, level} : std::vector<double>{0., 1.}, {level, level}};
 
       const MeshGrid fitted(cloud.X, cloud.Y, cloud.Z, cellsize);
-      const MeshGrid given(cloud.X, cloud.Y, cloud.Z, cellsize, lims);
+      const MeshGrid given(cloud.X, cloud.Y, cloud.Z, cellsize, boxOf(lims));
 
       for (const MeshGrid* grid : {&fitted, &given}) {
         for (int axis=3-flatAxes; axis<3; ++axis) {
@@ -734,15 +751,15 @@ namespace {
   void testCountLimits ()
   {
     const std::vector<std::vector<double>> unitBox = {{0., 1.}, {0., 1.}, {0., 1.}};
-    ASSERT_THROWS_PLAIN(MeshGrid({0.5}, {0.5}, {0.5}, 1.e-300, unitBox));
-    ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, 1.e-300, unitBox));
+    ASSERT_THROWS_PLAIN(MeshGrid({0.5}, {0.5}, {0.5}, 1.e-300, boxOf(unitBox)));
+    ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, 1.e-300, boxOf(unitBox)));
 
     const double pastIntMax = 2147483648.;
-    ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, 1., {{0., pastIntMax}, {0., 1.}, {0., 1.}}));
-    ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, 1., {{0., 1.}, {0., 1.}, {0., pastIntMax}}));
+    ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, 1., boxOf({{0., pastIntMax}, {0., 1.}, {0., 1.}})));
+    ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, 1., boxOf({{0., 1.}, {0., 1.}, {0., pastIntMax}})));
 
     const double side = 4194304.;
-    ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, 1., {{0., side}, {0., side}, {0., side}}));
+    ASSERT_THROWS_PLAIN(MeshGrid({}, {}, {}, 1., boxOf({{0., side}, {0., side}, {0., side}})));
 
     const double huge = 1.e308;
     ASSERT_THROWS_PLAIN(MeshGrid({-huge, huge}, {0., 1.}, {0., 1.}, 1.));
@@ -774,7 +791,7 @@ namespace {
     }
     cloud.alive.assign(cloud.size(), 1);
 
-    const MeshGrid grid(cloud.X, cloud.Y, cloud.Z, 1., lims);
+    const MeshGrid grid(cloud.X, cloud.Y, cloud.Z, 1., boxOf(lims));
     assert(grid.get_nCells()[0] == 46341);
 
     for (int q=0; q<40; ++q) {
@@ -792,7 +809,7 @@ namespace {
     ends.Z = {0.5, 0.5};
     ends.alive.assign(2, 1);
 
-    const MeshGrid sparse(ends.X, ends.Y, ends.Z, 1., lims);
+    const MeshGrid sparse(ends.X, ends.Y, ends.Z, 1., boxOf(lims));
     assert(sparse.nearestObject(0u) == 1);
     assert(sparse.nearestObject(1u) == 0);
     checkNearest(sparse, ends, 1., 0.5, 0.5, -1);
@@ -830,7 +847,7 @@ namespace {
     std::uniform_int_distribution<unsigned int> pick(0, 1499);
 
     for (const double cellsize : cellsizes) {
-      const MeshGrid grid(cloud.X, cloud.Y, cloud.Z, cellsize, lims);
+      const MeshGrid grid(cloud.X, cloud.Y, cloud.Z, cellsize, boxOf(lims));
 
       for (const double ratio : ratios) {
         const double Rmax = ratio*cellsize;
@@ -877,7 +894,7 @@ namespace {
     // Rmax = 2.25 makes floor(Rmax/cellsize) = 2, so layer 2 is the last one
     // scanned and the object lies exactly on the outer edge.
     {
-      const MeshGrid grid({10.75, 13.}, {10.5, 10.5}, {10.5, 10.5}, 1., lims);
+      const MeshGrid grid({10.75, 13.}, {10.5, 10.5}, {10.5, 10.5}, 1., boxOf(lims));
       assert(grid.get_CellCoords(10.75, 10.5, 10.5)[0] == 10);
       assert(grid.get_CellCoords(13., 10.5, 10.5)[0] == 13);
       assert(sorted(grid.closeObjects(10.75, 10.5, 10.5, 2.25)) == std::vector<unsigned int>({0, 1}));
@@ -890,7 +907,7 @@ namespace {
     // The same at layer 4: offset 5, gap 4, distance 4.25 from x = 10.75 to
     // x = 15, with Rmax = 4.25 so floor(Rmax/cellsize) = 4.
     {
-      const MeshGrid grid({10.75, 15.}, {10.5, 10.5}, {10.5, 10.5}, 1., lims);
+      const MeshGrid grid({10.75, 15.}, {10.5, 10.5}, {10.5, 10.5}, 1., boxOf(lims));
       assert(sorted(grid.closeObjects(0u, 4.25)) == std::vector<unsigned int>({1}));
       assert(grid.closeObjects(0u, 4.25, 4.25).size() == 1);
     }
@@ -899,7 +916,7 @@ namespace {
     // layer floor(sqrt(12)) = 3, distance 2.25*sqrt(3) = 3.897. Rmax = 3.9375
     // keeps floor(Rmax/cellsize) = 3, so layer 3 is again the last scanned.
     {
-      const MeshGrid grid({10.75, 13.}, {10.75, 13.}, {10.75, 13.}, 1., lims);
+      const MeshGrid grid({10.75, 13.}, {10.75, 13.}, {10.75, 13.}, 1., boxOf(lims));
       const double d = std::sqrt(3.*2.25*2.25);
       assert(d > 3. && d < 3.9375);
       assert(sorted(grid.closeObjects(0u, 3.9375)) == std::vector<unsigned int>({1}));
@@ -927,7 +944,7 @@ namespace {
       const Cloud cloud = uniformCloud(n, gen);
       const double cellsize = factors[r]*mean_separation;
 
-      const MeshGrid grid(cloud.X, cloud.Y, cloud.Z, cellsize, lims);
+      const MeshGrid grid(cloud.X, cloud.Y, cloud.Z, cellsize, boxOf(lims));
       assert(grid.get_nObjects() == n);
 
       std::uniform_real_distribution<double> unit(0., 1.);
@@ -978,7 +995,7 @@ namespace {
     const Cloud cloud = uniformCloud(2000, gen);
 
     const double cellsize = 0.05;
-    const MeshGrid grid(cloud.X, cloud.Y, cloud.Z, cellsize, lims);
+    const MeshGrid grid(cloud.X, cloud.Y, cloud.Z, cellsize, boxOf(lims));
 
     std::uniform_real_distribution<double> unit(0., 1.);
     std::uniform_int_distribution<unsigned int> pick(0, 1999);
@@ -1024,7 +1041,7 @@ namespace {
     corner.alive.assign(2, 1);
 
     const MeshGrid corner_grid(corner.X, corner.Y, corner.Z, 1.,
-                               {{0., 40.}, {0., 40.}, {0., 40.}});
+                               boxOf({{0., 40.}, {0., 40.}, {0., 40.}}));
 
     const double d = std::sqrt(corner.dist_sq(1, 10., 10., 10.));
     assert(d > 12. && d < 12.2);
@@ -1063,7 +1080,7 @@ namespace {
     const std::vector<double> Z = {5., 5., 5., 5., 5., 5.};
     const std::vector<std::vector<double>> lims = {{0., 16.}, {0., 16.}, {0., 16.}};
 
-    const MeshGrid grid(X, Y, Z, 1., lims);
+    const MeshGrid grid(X, Y, Z, 1., boxOf(lims));
 
     auto sorted = [](std::vector<unsigned int> v) {
       std::sort(v.begin(), v.end());
@@ -1089,7 +1106,7 @@ namespace {
     const std::vector<double> dX = {2., 2., 2., 4.};
     const std::vector<double> dY = {2., 2., 2., 2.};
     const std::vector<double> dZ = {2., 2., 2., 2.};
-    const MeshGrid dup(dX, dY, dZ, 1., lims);
+    const MeshGrid dup(dX, dY, dZ, 1., boxOf(lims));
 
     assert(sorted(dup.closeObjects(2., 2., 2., 0.)) == std::vector<unsigned int>({0, 1, 2}));
     assert(sorted(dup.closeObjects(0u, 0.)) == std::vector<unsigned int>({1, 2}));
@@ -1130,7 +1147,7 @@ namespace {
 
     const double cellsizes[] = {0.4, 0.09, 0.02};
     for (const double cellsize : cellsizes) {
-      const MeshGrid grid(cloud.X, cloud.Y, cloud.Z, cellsize, lims);
+      const MeshGrid grid(cloud.X, cloud.Y, cloud.Z, cellsize, boxOf(lims));
       std::uniform_int_distribution<unsigned int> pick(0, (unsigned int)cloud.size()-1);
 
       for (int q=0; q<60; ++q) {
@@ -1175,7 +1192,7 @@ namespace {
       X.push_back(a); Y.push_back(b); Z.push_back(c);
     }
     const std::vector<std::vector<double>> small = {{0., 3.}, {0., 3.}, {0., 3.}};
-    const MeshGrid grid(X, Y, Z, 1.5, small);
+    const MeshGrid grid(X, Y, Z, 1.5, boxOf(small));
 
     assert(grid.nearestObjects(8, 13u) == std::vector<unsigned int>({4, 10, 12, 14, 16, 22, 1, 3}));
     assert(grid.nearestObjects(9, 1., 1., 1.) == std::vector<unsigned int>({13, 4, 10, 12, 14, 16, 22, 1, 3}));
@@ -1208,7 +1225,7 @@ namespace {
         cloud.Z.push_back(double(site[i]%side));
       }
       cloud.alive.assign(n, 1);
-      MeshGrid lattice(cloud.X, cloud.Y, cloud.Z, cellsize, box);
+      MeshGrid lattice(cloud.X, cloud.Y, cloud.Z, cellsize, boxOf(box));
 
       std::uniform_int_distribution<unsigned int> pick(0, (unsigned int)n-1);
       for (int r=0; r<40; ++r) {
@@ -1267,13 +1284,13 @@ namespace {
       const double q = std::nextafter(0.4, 0.);
       assert(0.7-q == 0.3);
 
-      const MeshGrid grid({0.7}, {0.}, {0.}, 0.1, lims);
+      const MeshGrid grid({0.7}, {0.}, {0.}, 0.1, boxOf(lims));
       assert(grid.get_CellCoords(0.7, 0., 0.)[0] == 7);
       assert(grid.get_CellCoords(q, 0., 0.)[0] == 3);
       assert(grid.closeObjects(q, 0., 0., 0.3) == std::vector<unsigned int>({0}));
       assert(grid.closeObjects(q, 0., 0., 0.3, 0.3) == std::vector<unsigned int>({0}));
 
-      const MeshGrid pair({q, 0.7}, {0., 0.}, {0., 0.}, 0.1, lims);
+      const MeshGrid pair({q, 0.7}, {0., 0.}, {0., 0.}, 0.1, boxOf(lims));
       assert(pair.closeObjects(0u, 0.3) == std::vector<unsigned int>({1}));
       assert(pair.closeObjects(1u, 0.3) == std::vector<unsigned int>({0}));
 
@@ -1286,11 +1303,11 @@ namespace {
       const double qa = q-a, bq = 0.7-q;
       assert(bq*bq < qa*qa);
 
-      const MeshGrid two({a, 0.7}, {0., 0.}, {0., 0.}, 0.1, lims);
+      const MeshGrid two({a, 0.7}, {0., 0.}, {0., 0.}, 0.1, boxOf(lims));
       assert(two.nearestObject(q, 0., 0.) == 1);
       assert(two.nearestObjects(1, q, 0., 0.) == std::vector<unsigned int>({1}));
 
-      const MeshGrid three({a, 0.7, q}, {0., 0., 0.}, {0., 0., 0.}, 0.1, lims);
+      const MeshGrid three({a, 0.7, q}, {0., 0., 0.}, {0., 0., 0.}, 0.1, boxOf(lims));
       assert(three.nearestObject(2u) == 1);
       assert(three.nearestObjects(1, 2u) == std::vector<unsigned int>({1}));
     }
@@ -1313,7 +1330,7 @@ namespace {
       const double dx = ox-qx, dy = oy-qy, dz = oz-qz;
       assert(dx*dx+dy*dy+dz*dz >= Rmin*Rmin);
 
-      const MeshGrid grid({ox}, {oy}, {oz}, c, lims);
+      const MeshGrid grid({ox}, {oy}, {oz}, c, boxOf(lims));
       assert(grid.closeObjects(qx, qy, qz, inf, Rmin) == std::vector<unsigned int>({0}));
 
       MeshGrid added = grid;
@@ -1384,7 +1401,7 @@ namespace {
         }
       }
 
-      const MeshGrid probe({}, {}, {}, c, lims);
+      const MeshGrid probe({}, {}, {}, c, boxOf(lims));
       const auto box = probe.get_lims();
       auto pick = [&](const int a) {
         double x;
@@ -1402,7 +1419,7 @@ namespace {
         cloud.Z.push_back(pick(2));
       }
       cloud.alive.assign(n, 1);
-      MeshGrid grid(cloud.X, cloud.Y, cloud.Z, c, lims);
+      MeshGrid grid(cloud.X, cloud.Y, cloud.Z, c, boxOf(lims));
       ++grids;
 
       for (int r=0; r<3; ++r) {
@@ -1461,7 +1478,7 @@ namespace {
     {
       const double c = 5.078493365404232, hi = 3279294.892895552;
       const std::vector<std::vector<double>> lims = {{0., hi}, {0., 1.}, {0., 1.}};
-      const MeshGrid grid({0., hi}, {0.5, 0.5}, {0.5, 0.5}, c, lims);
+      const MeshGrid grid({0., hi}, {0.5, 0.5}, {0.5, 0.5}, c, boxOf(lims));
       const auto box = grid.get_lims();
       assert(box[0][0] <= 0. && box[0][1] >= hi);
       assert(grid.nearestObject(0., 0.5, 0.5) == 0);
@@ -1479,7 +1496,7 @@ namespace {
       if (hi < lo) continue;
 
       const std::vector<std::vector<double>> lims = {{lo, hi}, {lo, hi}, {0., 0.}};
-      const MeshGrid grid({lo, hi}, {hi, lo}, {0., 0.}, c, lims);
+      const MeshGrid grid({lo, hi}, {hi, lo}, {0., 0.}, c, boxOf(lims));
       const auto box = grid.get_lims();
       assert(box[0][0] <= lo && box[0][1] >= hi);
       assert(box[1][0] <= lo && box[1][1] >= hi);
@@ -1513,7 +1530,7 @@ namespace {
       cloud.X.push_back(-scale); cloud.Y.push_back(-scale); cloud.Z.push_back(-scale);
       cloud.alive.assign(cloud.size(), 1);
 
-      const MeshGrid grid(cloud.X, cloud.Y, cloud.Z, scale/5., lims);
+      const MeshGrid grid(cloud.X, cloud.Y, cloud.Z, scale/5., boxOf(lims));
       std::uniform_int_distribution<unsigned int> pick(0, (unsigned int)cloud.size()-1);
 
       for (int q=0; q<40; ++q) {

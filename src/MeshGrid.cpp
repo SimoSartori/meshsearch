@@ -28,6 +28,12 @@ namespace {
 
   const double far_reach = 3.46413;
 
+  const double periodic_tolerance = 1.e-12;
+
+  const double periodic_slack = 0x1.4p-49;
+
+  const double plain_slack = 0x1.ap-50;
+
   const size_t scan_chunk = 64;
 
   const unsigned int min_block = 4;
@@ -51,6 +57,47 @@ namespace {
         dist_sq[k] = dx*dx+dy*dy+dz*dz;
       }
       for (size_t k=0; k<m; ++k) visit(base+k, dist_sq[k]);
+    }
+  }
+
+  template <class Visit>
+  void scanShifted (const double* x, const double* y, const double* z, const size_t n,
+                    const double X, const double Y, const double Z,
+                    const double sx, const double sy, const double sz, Visit&& visit)
+  {
+    double dist_sq[scan_chunk];
+    for (size_t base=0; base<n; base+=scan_chunk) {
+      const size_t m = std::min(scan_chunk, n-base);
+      const double* xb = x+base;
+      const double* yb = y+base;
+      const double* zb = z+base;
+      for (size_t k=0; k<m; ++k) {
+        const double dx = (xb[k]-X)-sx;
+        const double dy = (yb[k]-Y)-sy;
+        const double dz = (zb[k]-Z)-sz;
+        dist_sq[k] = dx*dx+dy*dy+dz*dz;
+      }
+      for (size_t k=0; k<m; ++k) visit(base+k, dist_sq[k]);
+    }
+  }
+
+  double minimumImage (const double d, const double period, const double half)
+  {
+    if (d >= half) return d-period;
+    if (d < -half) return d+period;
+    return d;
+  }
+
+  template <class Visit>
+  void scanImages (const double* x, const double* y, const double* z, const size_t n,
+                   const double X, const double Y, const double Z,
+                   const double* period, const double* half, Visit&& visit)
+  {
+    for (size_t k=0; k<n; ++k) {
+      const double dx = minimumImage(x[k]-X, period[0], half[0]);
+      const double dy = minimumImage(y[k]-Y, period[1], half[1]);
+      const double dz = minimumImage(z[k]-Z, period[2], half[2]);
+      visit(k, dx*dx+dy*dy+dz*dz);
     }
   }
 
@@ -187,6 +234,15 @@ namespace {
     return exceeds((reach*reach)*stop_factor, threshold);
   }
 
+  bool shellBeyondPeriodic (const unsigned int shell, const double cellsize, const double slack, const double threshold)
+  {
+    if (shell == 0) return false;
+    const double cells = double(shell);
+    if (!(cells > slack)) return false;
+    const double reach = (cells-slack)*cellsize;
+    return exceeds((reach*reach)*stop_factor, threshold);
+  }
+
   struct CellFaces {
     double lo[3];
     double pad[3];
@@ -203,6 +259,21 @@ namespace {
       const double span = double(nCells[i])*cellsize;
       faces.lo[i] = lims[i][0];
       faces.pad[i] = pad_scale*(std::fabs(lims[i][0])+std::fabs(lims[i][1])+2.*span+2.*cellsize);
+    }
+    return faces;
+  }
+
+  CellFaces periodicFaces (const std::vector<std::vector<double>>& lims,
+                           const std::array<unsigned int, 3>& nCells,
+                           const double cellsize,
+                           const std::array<bool, 3>& periodic,
+                           const std::array<double, 3>& omega)
+  {
+    CellFaces faces = cellFaces(lims, nCells, cellsize);
+    for (int i=0; i<3; ++i) {
+      if (!periodic[i]) continue;
+      const double span = double(nCells[i])*cellsize;
+      faces.pad[i] = pad_scale*(std::fabs(lims[i][0])+std::fabs(lims[i][1])+4.*span+2.*cellsize)+2.*omega[i];
     }
     return faces;
   }
@@ -267,7 +338,7 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
                                 const std::vector<double>& Y,
                                 const std::vector<double>& Z,
                                 const double cellsize,
-                                const std::vector<std::vector<double>>& limits)
+                                const Options& opt)
 {
   if (X.size() != Y.size() || X.size() != Z.size())
     throw Error("the coordinate vectors differ in length");
@@ -284,9 +355,13 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
       if (!std::isfinite((*axes[i])[k]))
         throw Error(std::string(axis_names[i])+" coordinate "+std::to_string(k)+" is not finite");
 
+  const bool any_periodic = opt.periodic[0] || opt.periodic[1] || opt.periodic[2];
+
   double lo[3], hi[3];
 
-  if (limits.empty()) {
+  if (!opt.limits) {
+    if (any_periodic)
+      throw Error("periodic axes require explicit limits");
     if (X.empty())
       throw Error("an empty set of coordinates requires explicit limits");
 
@@ -298,8 +373,7 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
     }
   }
   else {
-    if (limits.size() != 3 || limits[0].size() != 2 || limits[1].size() != 2 || limits[2].size() != 2)
-      throw Error("the limits matrix must be 3x2");
+    const auto& limits = *opt.limits;
 
     for (int i=0; i<3; ++i) {
       if (!std::isfinite(limits[i][0]) || !std::isfinite(limits[i][1]))
@@ -322,9 +396,56 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
     }
   }
 
+  double period[3] = {0., 0., 0.};
+  double ratio[3] = {0., 0., 0.};
+  double side = cellsize;
+  unsigned int cells_per_period = 0;
+
+  if (any_periodic) {
+    double shortest = std::numeric_limits<double>::infinity();
+    for (int i=0; i<3; ++i) {
+      if (!opt.periodic[i]) continue;
+      period[i] = hi[i]-lo[i];
+      if (!(period[i] >= tiny_sq))
+        throw Error(std::string(axis_names[i])+" is periodic but its period is below 2^-1000");
+      if (!(std::fabs(lo[i])+std::fabs(hi[i])+4.*period[i] <= huge_sq))
+        throw Error(std::string(axis_names[i])+" is periodic but its limits are too large for the period to be shifted");
+      shortest = std::min(shortest, period[i]);
+    }
+
+    for (int i=0; i<3; ++i) {
+      if (!opt.periodic[i]) continue;
+      ratio[i] = std::nearbyint(period[i]/shortest);
+      if (!(ratio[i] >= 1.) || !(std::fabs(period[i]-ratio[i]*shortest) <= periodic_tolerance*period[i]))
+        throw Error("the periodic sides must be integer multiples of the shortest one");
+    }
+
+    double n = std::ceil(shortest/cellsize);
+    if (!(n >= 1.)) n = 1.;
+    if (!(n <= double(std::numeric_limits<int>::max())))
+      throw Error("the grid would need more than 2147483647 cells along a periodic axis");
+    side = shortest/n;
+    if (side > cellsize) {
+      n += 1.;
+      if (!(n <= double(std::numeric_limits<int>::max())))
+        throw Error("the grid would need more than 2147483647 cells along a periodic axis");
+      side = shortest/n;
+    }
+    if (!std::isfinite(1./side))
+      throw Error("the cell side of a periodic grid is too small: its reciprocal overflows a double");
+    cells_per_period = static_cast<unsigned int>(n);
+  }
+
   std::array<unsigned int, 3> nCells;
   for (int i=0; i<3; ++i) {
-    const double n = std::ceil((hi[i]-lo[i])/cellsize);
+    if (opt.periodic[i]) {
+      const double n = ratio[i]*double(cells_per_period);
+      if (!(n <= double(std::numeric_limits<int>::max())))
+        throw Error("the grid would need more than 2147483647 cells along "+std::string(axis_names[i]));
+      nCells[i] = static_cast<unsigned int>(n);
+      continue;
+    }
+    const double n = std::ceil((hi[i]-lo[i])/side);
     if (!(n <= double(std::numeric_limits<int>::max())))
       throw Error("the grid would need more than 2147483647 cells along "+std::string(axis_names[i]));
     nCells[i] = (n >= 1.) ? static_cast<unsigned int>(n) : 1;
@@ -332,8 +453,14 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
 
   double grownLo[3], grownHi[3];
   for (int i=0; i<3; ++i) {
+    if (opt.periodic[i]) {
+      grownLo[i] = lo[i];
+      grownHi[i] = hi[i];
+      continue;
+    }
+
     const double range = hi[i]-lo[i];
-    double grid_span = nCells[i]*cellsize;
+    double grid_span = nCells[i]*side;
     double offset = (grid_span-range)/2.;
     grownLo[i] = lo[i]-offset;
     grownHi[i] = hi[i]+offset;
@@ -342,7 +469,7 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
       if (nCells[i] >= static_cast<unsigned int>(std::numeric_limits<int>::max()))
         throw Error("the grid would need more than 2147483647 cells along "+std::string(axis_names[i]));
       nCells[i]++;
-      grid_span = nCells[i]*cellsize;
+      grid_span = nCells[i]*side;
       offset = (grid_span-range)/2.;
       grownLo[i] = lo[i]-offset;
       grownHi[i] = hi[i]+offset;
@@ -367,29 +494,62 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
       || entries > std::vector<GridOffset>().max_size())
     throw Error(too_many_cells);
 
-  m_cellsize = cellsize;
+  double omega[3] = {0., 0., 0.};
+  double slack_axis[3] = {0., 0., 0.};
+  double slack = 0.;
+  if (any_periodic) {
+    double sum = 0.;
+    for (int i=0; i<3; ++i) {
+      const double span = double(nCells[i])*side;
+      double err;
+      if (opt.periodic[i]) {
+        omega[i] = (std::fabs(period[i]-span)+0x1p-52*span)*pad_factor;
+        err = periodic_slack*span+2.*omega[i];
+        slack_axis[i] = err;
+      }
+      else err = plain_slack*span;
+      const double cells = err/side;
+      sum += cells*cells;
+    }
+    slack = std::sqrt(sum)*pad_factor;
+  }
+
+  m_cellsize = side;
   m_nCells = nCells;
   m_lims = {{grownLo[0], grownHi[0]}, {grownLo[1], grownHi[1]}, {grownLo[2], grownHi[2]}};
+  m_periodic = opt.periodic;
+  m_periodic_any = any_periodic;
+  for (int i=0; i<3; ++i) {
+    m_period[i] = period[i];
+    m_omega[i] = omega[i];
+    m_slack_axis[i] = slack_axis[i];
+  }
+  m_slack = slack;
 
-  const int nCx = static_cast<int>(m_nCells[0]);
-  const int nCy = static_cast<int>(m_nCells[1]);
-  const int nCz = static_cast<int>(m_nCells[2]);
+  const int nC[3] = {static_cast<int>(m_nCells[0]), static_cast<int>(m_nCells[1]), static_cast<int>(m_nCells[2])};
+  int first[3], last[3];
+  std::uint64_t reach[3];
+  for (int i=0; i<3; ++i) {
+    first[i] = m_periodic[i] ? -(nC[i]/2) : -nC[i];
+    last[i] = m_periodic[i] ? static_cast<int>((std::int64_t(nC[i])+1)/2) : nC[i];
+    reach[i] = m_periodic[i] ? std::uint64_t(nC[i]/2) : std::uint64_t(nC[i]);
+  }
 
-  const std::uint64_t sum_sq = nx*nx+ny*ny+nz*nz;
+  const std::uint64_t sum_sq = reach[0]*reach[0]+reach[1]*reach[1]+reach[2]*reach[2];
   const unsigned int dim_mask = static_cast<unsigned int>
     (std::ceil(std::sqrt(3.)+std::sqrt(double(sum_sq))));
 
   auto mask = std::make_shared<std::vector<std::vector<GridOffset>>>(dim_mask);
 
-  for (int i=-nCx; i<nCx; ++i) {
+  for (int i=first[0]; i<last[0]; ++i) {
     const int abs_i = std::abs(i);
     const std::uint64_t dx = (abs_i > 0) ? abs_i-1 : 0;
     const std::uint64_t dx2 = dx*dx;
-    for (int j=-nCy; j<nCy; ++j) {
+    for (int j=first[1]; j<last[1]; ++j) {
       const int abs_j = std::abs(j);
       const std::uint64_t dy = (abs_j > 0) ? abs_j-1 : 0;
       const std::uint64_t dy2 = dy*dy;
-      for (int k=-nCz; k<nCz; ++k) {
+      for (int k=first[2]; k<last[2]; ++k) {
         const int abs_k = std::abs(k);
         const std::uint64_t dz = (abs_k > 0) ? abs_k-1 : 0;
         const std::uint64_t sum = dx2+dy2+dz*dz;
@@ -441,6 +601,17 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
   m_alive.assign(n, 1);
   m_nObjects = static_cast<unsigned int>(n);
 }
+
+
+// ===========================================================================
+
+
+meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
+                                const std::vector<double>& Y,
+                                const std::vector<double>& Z,
+                                const double cellsize)
+  : MeshGrid(X, Y, Z, cellsize, Options())
+{}
 
 
 // ===========================================================================
@@ -500,8 +671,19 @@ double meshsearch::MeshGrid::get_cellsize () const
 // ===========================================================================
 
 
+std::array<bool, 3> meshsearch::MeshGrid::get_periodic () const
+{
+  return m_periodic;
+}
+
+
+// ===========================================================================
+
+
 unsigned int meshsearch::MeshGrid::nearestObject (const double X, const double Y, const double Z) const
 {
+  if (m_periodic_any) return nearestObjectPeriodic(X, Y, Z, nullptr);
+
   const auto target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
   if (m_nObjects == 0) throw Error("the grid holds no objects");
 
@@ -554,6 +736,8 @@ unsigned int meshsearch::MeshGrid::nearestObject (const double X, const double Y
 
 unsigned int meshsearch::MeshGrid::nearestObject (const unsigned int index) const
 {
+  if (m_periodic_any) return nearestObjectPeriodic(0., 0., 0., &index);
+
   checkIndex(m_alive, index);
   if (m_nObjects < 2) throw Error("no other object remains in the grid");
 
@@ -614,6 +798,8 @@ unsigned int meshsearch::MeshGrid::nearestObject (const unsigned int index) cons
 std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned int N,
                                                                 const double X, const double Y, const double Z) const
 {
+  if (m_periodic_any) return nearestObjectsPeriodic(N, X, Y, Z, nullptr);
+
   const auto target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
   if (N > m_nObjects) throw Error("N is larger than the number of objects");
   if (N == 0) return {};
@@ -676,6 +862,8 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
 std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned int N,
                                                                 const unsigned int index) const
 {
+  if (m_periodic_any) return nearestObjectsPeriodic(N, 0., 0., 0., &index);
+
   checkIndex(m_alive, index);
   if (N >= m_nObjects) throw Error("N is larger than the number of available neighbours");
   if (N == 0) return {};
@@ -744,6 +932,8 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
 std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const double X, const double Y, const double Z,
                                                               const double Rmax, const double Rmin) const
 {
+  if (m_periodic_any) return closeObjectsPeriodic(X, Y, Z, Rmax, Rmin, nullptr);
+
   const auto target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
   checkRadii(Rmax, Rmin);
 
@@ -795,6 +985,8 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const double X, co
 std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const unsigned int index,
                                                               const double Rmax, const double Rmin) const
 {
+  if (m_periodic_any) return closeObjectsPeriodic(0., 0., 0., Rmax, Rmin, &index);
+
   checkIndex(m_alive, index);
   checkRadii(Rmax, Rmin);
 
@@ -841,6 +1033,201 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const unsigned int
       }
     }
   }
+
+  return finalInd;
+}
+
+
+// ===========================================================================
+
+
+template <class Threshold, class Visit>
+void meshsearch::MeshGrid::walkPeriodic (const std::array<unsigned int, 3>& target,
+                                         const double X, const double Y, const double Z, const double Rmin,
+                                         Threshold&& threshold, Visit&& visit) const
+{
+  const CellFaces faces = periodicFaces(m_lims, m_nCells, m_cellsize, m_periodic, m_omega);
+
+  std::int64_t cells[3], where[3];
+  double period[3], half[3];
+  for (int a=0; a<3; ++a) {
+    cells[a] = m_nCells[a];
+    where[a] = target[a];
+    period[a] = m_periodic[a] ? m_period[a] : 0.;
+    half[a] = m_periodic[a] ? m_period[a]*0.5 : std::numeric_limits<double>::infinity();
+  }
+
+  const unsigned int nShells = static_cast<unsigned int>(m_mask->size());
+
+  unsigned int firstShellIndex = 0;
+  const double Rmin_sq = Rmin*Rmin;
+  if (Rmin_sq >= tiny_sq) {
+    CellFaces start = faces;
+    for (int a=0; a<3; ++a)
+      if (m_periodic[a]) start.pad[a] = 2.*m_slack_axis[a];
+    firstShellIndex = firstShell(start, nShells, Rmin, Rmin_sq);
+  }
+
+  for (unsigned int maskInd=firstShellIndex; maskInd<nShells; ++maskInd) {
+    if (shellBeyondPeriodic(maskInd, m_cellsize, m_slack, threshold())) break;
+
+    for (const auto& offset : (*m_mask)[maskInd]) {
+      const std::int64_t step[3] = {offset.i, offset.j, offset.k};
+      std::int64_t unwrapped[3], cell[3];
+      double shift[3];
+      bool inside = true, end = false, wrapped = false;
+
+      for (int a=0; a<3; ++a) {
+        const std::int64_t u = where[a]+step[a];
+        unwrapped[a] = u;
+        shift[a] = 0.;
+        if (!m_periodic[a]) {
+          if (u < 0 || u >= cells[a]) { inside = false; break; }
+          cell[a] = u;
+          continue;
+        }
+        if (u < 0) { cell[a] = u+cells[a]; shift[a] = period[a]; wrapped = true; }
+        else if (u >= cells[a]) { cell[a] = u-cells[a]; shift[a] = -period[a]; wrapped = true; }
+        else cell[a] = u;
+        if (2*step[a] >= cells[a]-2 || -2*step[a] >= cells[a]-2) end = true;
+      }
+      if (!inside) continue;
+
+      const CellBlock& block = m_cells[getLinearIndex(static_cast<unsigned int>(cell[0]), static_cast<unsigned int>(cell[1]), static_cast<unsigned int>(cell[2]))];
+      if (block.count == 0) continue;
+      const size_t first = block.start;
+      const double* x = m_X.data()+first;
+      const double* y = m_Y.data()+first;
+      const double* z = m_Z.data()+first;
+      auto visitSlot = [&] (const size_t k, const double dist_sq) { visit(first, k, dist_sq); };
+
+      if (end) {
+        scanImages(x, y, z, block.count, X, Y, Z, period, half, visitSlot);
+        continue;
+      }
+      if (cellBeyond(faces, unwrapped[0], unwrapped[1], unwrapped[2], X, Y, Z, threshold())) continue;
+      if (wrapped) scanShifted(x, y, z, block.count, X, Y, Z, shift[0], shift[1], shift[2], visitSlot);
+      else scanBlock(x, y, z, block.count, X, Y, Z, visitSlot);
+    }
+  }
+}
+
+
+// ===========================================================================
+
+
+unsigned int meshsearch::MeshGrid::nearestObjectPeriodic (double X, double Y, double Z, const unsigned int* index) const
+{
+  size_t self = no_slot;
+  if (index) {
+    checkIndex(m_alive, *index);
+    if (m_nObjects < 2) throw Error("no other object remains in the grid");
+    self = m_toInternal[*index];
+    X = m_X[self];
+    Y = m_Y[self];
+    Z = m_Z[self];
+  }
+  const auto target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
+  if (!index && m_nObjects == 0) throw Error("the grid holds no objects");
+
+  double min_dist_sq = std::numeric_limits<double>::max();
+  size_t finalSlot = no_slot;
+
+  walkPeriodic(target, X, Y, Z, 0., [&] { return min_dist_sq; },
+               [&] (const size_t first, const size_t k, const double dist_sq) {
+                 if (first+k == self) return;
+                 if (finalSlot == no_slot || dist_sq < min_dist_sq) {
+                   min_dist_sq = dist_sq;
+                   finalSlot = first+k;
+                 }
+               });
+
+  if (finalSlot == no_slot)
+    throw Error("no object found");
+
+  return m_toPublic[finalSlot];
+}
+
+
+// ===========================================================================
+
+
+std::vector<unsigned int> meshsearch::MeshGrid::nearestObjectsPeriodic (const unsigned int N,
+                                                                        double X, double Y, double Z,
+                                                                        const unsigned int* index) const
+{
+  size_t self = no_slot;
+  if (index) {
+    checkIndex(m_alive, *index);
+    if (N >= m_nObjects) throw Error("N is larger than the number of available neighbours");
+    if (N == 0) return {};
+    self = m_toInternal[*index];
+    X = m_X[self];
+    Y = m_Y[self];
+    Z = m_Z[self];
+  }
+  const auto target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
+  if (!index) {
+    if (N > m_nObjects) throw Error("N is larger than the number of objects");
+    if (N == 0) return {};
+  }
+
+  auto walk = [&] (auto& pq)
+  {
+    walkPeriodic(target, X, Y, Z, 0., [&] { return pq.T; },
+                 [&] (const size_t first, const size_t k, const double dist_sq) {
+                   if (first+k != self && dist_sq <= pq.T) pq.offer(dist_sq, m_toPublic[first+k]);
+                 });
+  };
+
+  std::vector<unsigned int> finalInd;
+  if (N <= sorted_limit) {
+    SortedKeep pq(N);
+    walk(pq);
+    pq.finish(finalInd);
+  }
+  else {
+    BufferKeep pq(N);
+    walk(pq);
+    pq.finish(finalInd);
+  }
+
+  return finalInd;
+}
+
+
+// ===========================================================================
+
+
+std::vector<unsigned int> meshsearch::MeshGrid::closeObjectsPeriodic (double X, double Y, double Z,
+                                                                      const double Rmax, const double Rmin,
+                                                                      const unsigned int* index) const
+{
+  size_t self = no_slot;
+  std::array<unsigned int, 3> target;
+  if (index) {
+    checkIndex(m_alive, *index);
+    checkRadii(Rmax, Rmin);
+    self = m_toInternal[*index];
+    X = m_X[self];
+    Y = m_Y[self];
+    Z = m_Z[self];
+    target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
+  }
+  else {
+    target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
+    checkRadii(Rmax, Rmin);
+  }
+
+  const double Rmax_sq = Rmax*Rmax;
+  const double Rmin_sq = Rmin*Rmin;
+
+  std::vector<unsigned int> finalInd;
+
+  walkPeriodic(target, X, Y, Z, Rmin, [&] { return Rmax_sq; },
+               [&] (const size_t first, const size_t k, const double dist_sq) {
+                 if (first+k != self && dist_sq <= Rmax_sq && dist_sq >= Rmin_sq) finalInd.push_back(m_toPublic[first+k]);
+               });
 
   return finalInd;
 }

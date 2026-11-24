@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added
+
+- C++: periodic axes. `MeshGrid::Options` holds the `limits` and a per-axis
+  `periodic` flag, and `get_periodic()` returns the flags. On a periodic axis
+  distances are minimum-image distances and any radius is valid. The Python
+  interface follows in a later change.
+
+### Changed (C++ interface)
+
+- The constructor takes `const MeshGrid::Options&` in place of the limits
+  `std::vector<std::vector<double>>`, which is removed. `MeshGrid(X, Y, Z,
+  cellsize)` is unchanged. With no periodic axis the behaviour and every
+  result are as before.
+
 ### Fixed
 
 - `nearestObject` (both overloads; `nearest_object` in Python) could return an
