@@ -83,7 +83,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, macos-latest]
-        python: ["3.12", "3.14t"]
+        python: ["3.10", "3.12", "3.14t"]
 
     # The job above builds the static library and links it into executables.
     # This one links it into a shared object, which is a different link and the
