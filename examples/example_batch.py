@@ -17,7 +17,7 @@ import meshsearch
 rng = np.random.default_rng(7)
 n = 200_000
 x, y, z = rng.random(n), rng.random(n), rng.random(n)
-grid = meshsearch.MeshGrid(x, y, z, 4 * n ** (-1 / 3), [[0.0, 1.0]] * 3)
+grid = meshsearch.MeshGrid(x, y, z, 4 * n ** (-1 / 3), limits=[[0.0, 1.0]] * 3)
 
 # Query points go in as three arrays, the same shape as the constructor takes.
 # They must be numpy arrays rather than lists: an array argument is what selects

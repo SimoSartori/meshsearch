@@ -92,7 +92,7 @@ namespace meshsearch {
      *    more than 2147483647 cells along an axis, or more cells or memory
      *    than 64-bit sizes can count; or if there are more than 4294967295
      *    objects
-     *  @throw Error, for periodic axes, if opt.limits is unset; if a period
+     *  @throw Error on a periodic axis if opt.limits is unset; if a period
      *    hi-lo is below 2^-1000 (zero extent included) or if
      *    |lo|+|hi|+4*(hi-lo) exceeds 2^1000; or if a period is not an integer
      *    multiple of the shortest one, within a relative 1e-12

@@ -58,6 +58,18 @@ namespace {
     return LimsArray(held->data(), {3, 2}, owner);
   }
 
+  bool isBool (const nb::handle& value)
+  {
+    const std::string type = Py_TYPE(value.ptr())->tp_name;
+    return PyBool_Check(value.ptr()) || type == "numpy.bool_" || type == "numpy.bool";
+  }
+
+  bool flag (const nb::handle& value)
+  {
+    if (!isBool(value)) throw nb::type_error("periodic must be a bool or a sequence of three bools");
+    return PyObject_IsTrue(value.ptr()) == 1;
+  }
+
   nb::tuple triple (const std::array<unsigned int, 3>& values)
   {
     return nb::make_tuple(values[0], values[1], values[2]);
@@ -139,8 +151,17 @@ NB_MODULE(meshsearch, m)
             const std::vector<double>& y,
             const std::vector<double>& z,
             const double cellsize,
-            const std::optional<std::vector<std::vector<double>>>& limits) {
+            const std::optional<std::vector<std::vector<double>>>& limits,
+            const nb::object& periodic) {
            meshsearch::MeshGrid::Options options;
+           if (isBool(periodic)) {
+             options.periodic.fill(flag(periodic));
+           }
+           else {
+             if (!nb::isinstance<nb::sequence>(periodic) || nb::isinstance<nb::str>(periodic) || nb::len(periodic) != 3)
+               throw nb::type_error("periodic must be a bool or a sequence of three bools");
+             for (size_t a=0; a<3; ++a) options.periodic[a] = flag(periodic[nb::int_(a)]);
+           }
            if (limits) {
              if (limits->size() != 3 || (*limits)[0].size() != 2 || (*limits)[1].size() != 2 || (*limits)[2].size() != 2)
                throw meshsearch::Error("the limits matrix must be 3x2");
@@ -150,19 +171,36 @@ NB_MODULE(meshsearch, m)
            }
            new (self) meshsearch::MeshGrid(x, y, z, cellsize, options);
          },
-         "x"_a, "y"_a, "z"_a, "cellsize"_a, "limits"_a = nb::none(),
-         "Build the grid over the points, which must be of equal length.\n"
-         "limits is ((xlo,xhi),(ylo,yhi),(zlo,zhi)); when omitted, the data\n"
-         "range padded by a margin proportional to it. Each side of the box\n"
-         "is grown symmetrically to a whole number of cells, and always\n"
-         "contains limits: where rounding would leave it inside them, one more\n"
-         "cell is added. An axis of zero extent gets one cell.\n\n"
+         "x"_a, "y"_a, "z"_a, "cellsize"_a, nb::kw_only(),
+         "limits"_a = nb::none(), "periodic"_a = false,
+         "Build the grid over the points, which must be of equal length.\n\n"
+         "limits, keyword-only, is ((xlo,xhi),(ylo,yhi),(zlo,zhi)); when\n"
+         "omitted, the data range padded by a margin proportional to it. Each\n"
+         "non-periodic side of the box is grown symmetrically to a whole number\n"
+         "of cells, and always contains limits: where rounding would leave it\n"
+         "inside them, one more cell is added. An axis of zero extent gets one\n"
+         "cell.\n\n"
+         "periodic, keyword-only, is a bool for all three axes or a triple of\n"
+         "bools, one per axis; the default is False. On a periodic axis the box\n"
+         "is exactly limits, which are then required, and distances are\n"
+         "minimum-image distances: the displacement along the axis is\n"
+         "dx = y - q, replaced by dx - L if dx >= L/2 and by dx + L if\n"
+         "dx < -L/2, where L = hi - lo (a displacement of exactly +L/2 is taken\n"
+         "as -L/2). Each object is seen once, at its nearest image, and any\n"
+         "radius is valid, +inf included. Coordinates are not wrapped: a point\n"
+         "outside limits is an error. The periodic sides must be integer\n"
+         "multiples of the shortest one, within a relative 1e-12. All periodic\n"
+         "axes share one cell side, never larger than cellsize; the value\n"
+         "actually used is the cellsize property.\n\n"
          "Raises meshsearch.Error for a cellsize that is not finite and\n"
          "positive, or so small that 1/cellsize overflows a double; limits\n"
          "that are not finite or have lo > hi; a coordinate that is not finite\n"
          "or outside limits; a box whose squared diagonal overflows a double\n"
          "(an extent of about 1e154 along an axis); or a grid too large to\n"
-         "count. MemoryError if the grid cannot be allocated.")
+         "count; for a periodic axis without limits, with a period below 2**-1000\n"
+         "(zero extent included) or too large for its cells to be addressed, or\n"
+         "not an integer multiple of the shortest. MemoryError if the grid cannot\n"
+         "be allocated. TypeError if periodic is neither a bool nor three bools.")
 
     .def("__len__", &meshsearch::MeshGrid::get_nObjects,
          "Number of objects in the grid, excluding removed ones.")
@@ -175,13 +213,23 @@ NB_MODULE(meshsearch, m)
     .def_prop_ro("lims",
                  [](const meshsearch::MeshGrid& self) { return limsArray(self.get_lims()); },
                  nb::rv_policy::move,
-                 "The box, grown to whole cells, as a 3x2 array.")
+                 "The box as a 3x2 array: grown to whole cells on a non-periodic axis,\n"
+                 "exactly the limits given on a periodic one.")
 
     .def_prop_ro("n_cells",
                  [](const meshsearch::MeshGrid& self) { return triple(self.get_nCells()); },
                  "Cells per axis.")
 
-    .def_prop_ro("cellsize", &meshsearch::MeshGrid::get_cellsize, "Cell side.")
+    .def_prop_ro("cellsize", &meshsearch::MeshGrid::get_cellsize,
+                 "Cell side. The cellsize requested, unless an axis is periodic,\n"
+                 "where it can be slightly smaller.")
+
+    .def_prop_ro("periodic",
+                 [](const meshsearch::MeshGrid& self) {
+                   const auto p = self.get_periodic();
+                   return nb::make_tuple(p[0], p[1], p[2]);
+                 },
+                 "Per axis, whether the box is periodic: a tuple of three bools.")
 
     .def("nearest_object",
          [](const meshsearch::MeshGrid& self, const Coords& x, const Coords& y, const Coords& z) {

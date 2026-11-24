@@ -6,7 +6,8 @@ and returns numpy arrays where C++ returns vectors.
 
 | C++ | Python | notes |
 |---|---|---|
-| `MeshGrid(X, Y, Z, cellsize, limits)` | `MeshGrid(x, y, z, cellsize, limits)` | `limits` optional in both |
+| `MeshGrid(X, Y, Z, cellsize, options)` | `MeshGrid(x, y, z, cellsize, *, limits=None, periodic=False)` | C++ passes `limits` and `periodic` in a `MeshGrid::Options`; Python takes them as keywords |
+| `get_periodic()` | `grid.periodic` | property; a tuple of three bools in Python |
 | `get_nObjects()` | `len(grid)` | live objects, removals excluded |
 | `isAlive(index)` | `is_alive(index)` | |
 | `get_lims()` | `grid.lims` | property; a 3×2 array in Python |

@@ -70,6 +70,10 @@ if (MESHSEARCH_BUILD_EXAMPLES)
   add_executable(example examples/example.cpp)
   target_link_libraries(example PRIVATE meshsearch)
   target_compile_options(example PRIVATE ${MESHSEARCH_PRIVATE_OPTIONS})
+
+  add_executable(example_periodic examples/example_periodic.cpp)
+  target_link_libraries(example_periodic PRIVATE meshsearch)
+  target_compile_options(example_periodic PRIVATE ${MESHSEARCH_PRIVATE_OPTIONS})
 endif()
 
 if (MESHSEARCH_BUILD_TESTS)
@@ -89,6 +93,10 @@ if (MESHSEARCH_BUILD_TESTS)
   target_compile_options(test_periodic PRIVATE ${MESHSEARCH_PRIVATE_OPTIONS})
 
   add_test(NAME periodic COMMAND test_periodic)
+
+  if (MESHSEARCH_BUILD_EXAMPLES)
+    add_test(NAME example_periodic COMMAND example_periodic)
+  endif()
 endif()
 
 if (MESHSEARCH_BUILD_PYTHON)
