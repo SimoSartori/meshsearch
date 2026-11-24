@@ -122,9 +122,29 @@ if (MESHSEARCH_BUILD_TESTS)
   add_test(NAME forms COMMAND test_forms)
 
   if (MESHSEARCH_BUILD_EXAMPLES)
+    add_test(NAME example COMMAND example)
     add_test(NAME example_periodic COMMAND example_periodic)
     add_test(NAME example_batch COMMAND example_batch)
   endif()
+
+  # The README's C++ block is a complete program: it is cut out of README.md
+  # here, so that what the README shows is what gets compiled and run.
+  file(READ ${CMAKE_CURRENT_SOURCE_DIR}/README.md MESHSEARCH_README)
+  string(FIND "${MESHSEARCH_README}" "```cpp\n" MESHSEARCH_README_BEGIN)
+  if (MESHSEARCH_README_BEGIN EQUAL -1)
+    message(FATAL_ERROR "README.md has no cpp block")
+  endif()
+  math(EXPR MESHSEARCH_README_BEGIN "${MESHSEARCH_README_BEGIN} + 7")
+  string(SUBSTRING "${MESHSEARCH_README}" ${MESHSEARCH_README_BEGIN} -1 MESHSEARCH_README)
+  string(FIND "${MESHSEARCH_README}" "```" MESHSEARCH_README_END)
+  string(SUBSTRING "${MESHSEARCH_README}" 0 ${MESHSEARCH_README_END} MESHSEARCH_README)
+  file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/readme_cpp.cpp "${MESHSEARCH_README}")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/README.md)
+
+  add_executable(readme_cpp ${CMAKE_CURRENT_BINARY_DIR}/readme_cpp.cpp)
+  target_link_libraries(readme_cpp PRIVATE meshsearch)
+  target_compile_options(readme_cpp PRIVATE ${MESHSEARCH_PRIVATE_OPTIONS})
+  add_test(NAME readme_cpp COMMAND readme_cpp)
 endif()
 
 if (MESHSEARCH_BUILD_PYTHON)

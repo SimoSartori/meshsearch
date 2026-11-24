@@ -83,22 +83,43 @@ and coincident points. The rest check the guarantees the header states.
 ```cpp
 #include "meshsearch/MeshGrid.h"
 
-// coordinates as three parallel vectors, and a cell side in the same unit
-meshsearch::MeshGrid grid(X, Y, Z, cellsize);
+#include <array>
+#include <cstdio>
+#include <random>
+#include <vector>
 
-// a box with limits, periodic in every direction
-meshsearch::MeshGrid::Options options;
-options.limits = std::array<std::array<double,2>,3>{{{0.,1.}, {0.,1.}, {0.,1.}}};
-options.periodic = {true, true, true};
-meshsearch::MeshGrid box(X, Y, Z, cellsize, options);
+int main ()
+{
+  // coordinates as three parallel vectors, and a cell side in the same unit
+  std::mt19937 gen(1);
+  std::uniform_real_distribution<double> unit(0., 1.);
+  std::vector<double> X, Y, Z;
+  for (int i=0; i<1000; ++i) {
+    X.push_back(unit(gen));
+    Y.push_back(unit(gen));
+    Z.push_back(unit(gen));
+  }
+  const double cellsize = 0.125;
+  meshsearch::MeshGrid grid(X, Y, Z, cellsize);
 
-unsigned int nearest = grid.nearestObject(0.5, 0.5, 0.5);
-std::vector<unsigned int> ten = grid.nearestObjects(10, 0.5, 0.5, 0.5);
-std::vector<unsigned int> shell = grid.closeObjects(0.5, 0.5, 0.5, 0.15, 0.10);
+  // a box with limits, periodic in every direction
+  meshsearch::MeshGrid::Options options;
+  options.limits = std::array<std::array<double,2>,3>{{{0.,1.}, {0.,1.}, {0.,1.}}};
+  options.periodic = {true, true, true};
+  meshsearch::MeshGrid box(X, Y, Z, cellsize, options);
 
-// the same questions about an object in the grid, which is excluded from
-// its own answer
-std::vector<unsigned int> around = grid.nearestObjects(5, nearest);
+  unsigned int nearest = grid.nearestObject(0.5, 0.5, 0.5);
+  std::vector<unsigned int> ten = grid.nearestObjects(10, 0.5, 0.5, 0.5);
+  std::vector<unsigned int> shell = grid.closeObjects(0.5, 0.5, 0.5, 0.15, 0.10);
+
+  // the same questions about an object in the grid, which is excluded from
+  // its own answer
+  std::vector<unsigned int> around = grid.nearestObjects(5, nearest);
+
+  std::printf("%zu nearest, %zu in the shell, %zu around object %u\n",
+              ten.size(), shell.size(), around.size(), nearest);
+  return ten.size() == 10 && around.size() == 5 && box.get_nObjects() == 1000 ? 0 : 1;
+}
 ```
 
 <!-- docs:concepts-start -->
@@ -166,6 +187,11 @@ pip install .
 import numpy as np
 import meshsearch
 
+rng = np.random.default_rng(1)
+x, y, z = rng.random((3, 1000))                        # the points, in the unit cube
+cellsize = 0.125
+index = 0                                              # the position of an object
+
 grid = meshsearch.MeshGrid(x, y, z, cellsize)          # three arrays, one cell side
 box = meshsearch.MeshGrid(x, y, z, cellsize,           # limits and periodic are
                           limits=[[0, 1]] * 3,         # keyword-only; periodic is
@@ -204,6 +230,15 @@ The point-taking queries also accept arrays of query points and answer all of
 them in one call, results in query order:
 
 ```python
+import numpy as np
+import meshsearch
+
+rng = np.random.default_rng(1)
+x, y, z = rng.random((3, 1000))
+grid = meshsearch.MeshGrid(x, y, z, 0.125, limits=[[0, 1]] * 3)
+qx, qy, qz = rng.random((3, 200))                      # the query points
+indices = np.arange(0, 1000, 5)                        # object indices
+
 nearest = grid.nearest_object(qx, qy, qz)              # (n_query,) uint32
 five    = grid.nearest_objects(5, qx, qy, qz)          # (n_query, 5) uint32
 idx, off = grid.close_objects(qx, qy, qz, 0.02)        # a meshsearch.Batch

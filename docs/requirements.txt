@@ -1,6 +1,8 @@
 # The documentation build. The package itself is installed separately, because
-# the Python reference is read from the installed module.
-sphinx >= 8
-furo
-breathe
-myst-parser
+# the Python reference is read from the installed module. Pinned to the
+# versions that build with -W -n and no warning.
+sphinx==9.2.0
+furo==2025.12.19
+breathe==5.1.0
+myst-parser==5.2.0
+docutils==0.23
