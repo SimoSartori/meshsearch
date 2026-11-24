@@ -4,6 +4,10 @@
 
 ### Added
 
+- Python: the module declares free-threaded support, so importing it does not
+  re-enable the GIL on CPython 3.14t and later. Regular builds are unchanged.
+  Concurrent queries on one grid are documented as safe, and
+  `add_object`/`remove_object` as not to run alongside other use of the grid.
 - C++: `contains(X, Y, Z)`, true when a query at the point is accepted, that is,
   when the point lies in the box, with a batch form returning one
   `std::uint8_t` (0 or 1) per point and a form writing into a container.

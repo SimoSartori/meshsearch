@@ -378,13 +378,19 @@ known only once it has run, so no array could be supplied in advance. Use
 
 ## Threads
 
-Const members — every query — may be called concurrently on one grid from any
-number of threads; `addObject` and `removeObject` may not run alongside
-anything else on the same grid. The library starts no threads of its own: a
-batch runs on the thread that calls it.
+In C++, const members, which are all the queries, may be called concurrently on
+one grid from any number of threads. `addObject` and `removeObject` may not run
+alongside anything else on the same grid: no other thread may use the grid
+while one of them runs. The library starts no threads of its own, and a batch
+runs on the thread that calls it.
 
-In Python, a batched call releases the GIL while the queries run, so other
-Python threads keep running meanwhile, and several threads can query one grid
-at the same time. The caller is then responsible for the rule above: do not
-modify a grid with `add_object` or `remove_object` while other threads query
-it. A single-point query holds the GIL throughout.
+In Python the rule is the same: several threads can query one grid at the same
+time, with single or batched calls of any query, and each gets exactly the
+result a serial call gets. Do not call `add_object` or `remove_object` while
+other threads use the grid; the caller has to ensure it, for instance with a
+lock, since the grid takes none. A batched call releases the GIL while the
+queries run, so other Python threads keep running meanwhile.
+
+The module declares that it does not need the GIL, so on a free-threaded build
+of CPython (3.14t and later) importing it leaves the GIL disabled and the
+threads query truly in parallel, under the same rule.
