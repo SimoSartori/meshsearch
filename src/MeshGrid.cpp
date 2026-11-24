@@ -4,7 +4,6 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
-#include <queue>
 #include <string>
 
 namespace {
@@ -43,6 +42,72 @@ namespace {
     {
       return dist_sq < other.dist_sq || (dist_sq == other.dist_sq && index < other.index);
     }
+  };
+
+  const unsigned int sorted_limit = 56;
+
+  const double no_threshold = std::numeric_limits<double>::infinity();
+
+  class SortedKeep {
+  public:
+    double T = no_threshold;
+    explicit SortedKeep (const unsigned int N) : m_N(N) { m_a.reserve(N); }
+    void offer (const double d, const unsigned int idx)
+    {
+      const PartNode node = {d, idx};
+      size_t pos = m_a.size();
+      if (pos < m_N) m_a.push_back(node);
+      else {
+        if (!(node < m_a[pos-1])) return;
+        --pos;
+      }
+      PartNode* a = m_a.data();
+      while (pos > 0 && node < a[pos-1]) { a[pos] = a[pos-1]; --pos; }
+      a[pos] = node;
+      if (m_a.size() == m_N) T = a[m_N-1].dist_sq;
+    }
+    void finish (std::vector<unsigned int>& out) const
+    {
+      out.resize(m_a.size());
+      for (size_t i=0; i<m_a.size(); ++i) out[i] = m_a[i].index;
+    }
+  private:
+    std::vector<PartNode> m_a;
+    size_t m_N;
+  };
+
+  class BufferKeep {
+  public:
+    double T = no_threshold;
+    explicit BufferKeep (const unsigned int N) : m_N(N), m_cap(2*size_t(N)) { m_b.reserve(m_cap); }
+    void offer (const double d, const unsigned int idx)
+    {
+      m_b.push_back({d, idx});
+      const size_t n = m_b.size();
+      if (n == m_N && T == no_threshold) {
+        double mx = m_b[0].dist_sq;
+        for (size_t i=1; i<n; ++i) mx = (m_b[i].dist_sq > mx) ? m_b[i].dist_sq : mx;
+        T = mx;
+      }
+      else if (n == m_cap) prune();
+    }
+    void finish (std::vector<unsigned int>& out)
+    {
+      if (m_b.size() > m_N) std::nth_element(m_b.begin(), m_b.begin()+(m_N-1), m_b.end());
+      const size_t n = std::min(m_b.size(), m_N);
+      std::sort(m_b.begin(), m_b.begin()+n);
+      out.resize(n);
+      for (size_t i=0; i<n; ++i) out[i] = m_b[i].index;
+    }
+  private:
+    void prune ()
+    {
+      std::nth_element(m_b.begin(), m_b.begin()+(m_N-1), m_b.end());
+      m_b.resize(m_N);
+      T = m_b[m_N-1].dist_sq;
+    }
+    std::vector<PartNode> m_b;
+    size_t m_N, m_cap;
   };
 
   std::array<unsigned int, 3> locate (const std::vector<std::vector<double>>& lims,
@@ -550,42 +615,43 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
 
   const CellFaces faces = cellFaces(m_lims, m_nCells, m_cellsize);
 
-  std::priority_queue<PartNode> pq;
-  unsigned int maskInd = 0;
+  auto walk = [&] (auto& pq)
+  {
+    unsigned int maskInd = 0;
 
-  while (maskInd < m_mask->size()) {
-    if (pq.size() == N && shellBeyond(maskInd, m_cellsize, pq.top().dist_sq)) break;
+    while (maskInd < m_mask->size()) {
+      if (shellBeyond(maskInd, m_cellsize, pq.T)) break;
 
-    for (const auto& offset : (*m_mask)[maskInd]) {
-      const std::int64_t currX = std::int64_t(targetX)+offset.i;
-      const std::int64_t currY = std::int64_t(targetY)+offset.j;
-      const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
-      if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
-        const auto& cell = m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
-        if (cell.empty() || (pq.size() == N && cellBeyond(faces, currX, currY, currZ, X, Y, Z, pq.top().dist_sq))) continue;
-        for (const auto& part_idx : cell) {
-          const double dx = m_X[part_idx]-X;
-          const double dy = m_Y[part_idx]-Y;
-          const double dz = m_Z[part_idx]-Z;
-          const double dist_sq = dx*dx+dy*dy+dz*dz;
-          if (pq.size() < N) pq.push({dist_sq, m_toPublic[part_idx]});
-          else if (dist_sq <= pq.top().dist_sq) {
-            const PartNode node = {dist_sq, m_toPublic[part_idx]};
-            if (node < pq.top()) {
-              pq.pop();
-              pq.push(node);
-            }
+      for (const auto& offset : (*m_mask)[maskInd]) {
+        const std::int64_t currX = std::int64_t(targetX)+offset.i;
+        const std::int64_t currY = std::int64_t(targetY)+offset.j;
+        const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
+        if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
+          const auto& cell = m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
+          if (cell.empty() || cellBeyond(faces, currX, currY, currZ, X, Y, Z, pq.T)) continue;
+          for (const auto& part_idx : cell) {
+            const double dx = m_X[part_idx]-X;
+            const double dy = m_Y[part_idx]-Y;
+            const double dz = m_Z[part_idx]-Z;
+            const double dist_sq = dx*dx+dy*dy+dz*dz;
+            if (dist_sq <= pq.T) pq.offer(dist_sq, m_toPublic[part_idx]);
           }
         }
       }
+      maskInd++;
     }
-    maskInd++;
-  }
+  };
 
-  std::vector<unsigned int> finalInd(pq.size());
-  for (size_t i=finalInd.size(); i-- > 0; ) {
-    finalInd[i] = pq.top().index;
-    pq.pop();
+  std::vector<unsigned int> finalInd;
+  if (N <= sorted_limit) {
+    SortedKeep pq(N);
+    walk(pq);
+    pq.finish(finalInd);
+  }
+  else {
+    BufferKeep pq(N);
+    walk(pq);
+    pq.finish(finalInd);
   }
 
   return finalInd;
@@ -618,43 +684,44 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
 
   const CellFaces faces = cellFaces(m_lims, m_nCells, m_cellsize);
 
-  std::priority_queue<PartNode> pq;
-  unsigned int maskInd = 0;
+  auto walk = [&] (auto& pq)
+  {
+    unsigned int maskInd = 0;
 
-  while (maskInd < m_mask->size()) {
-    if (pq.size() == N && shellBeyond(maskInd, m_cellsize, pq.top().dist_sq)) break;
+    while (maskInd < m_mask->size()) {
+      if (shellBeyond(maskInd, m_cellsize, pq.T)) break;
 
-    for (const auto& offset : (*m_mask)[maskInd]) {
-      const std::int64_t currX = std::int64_t(targetX)+offset.i;
-      const std::int64_t currY = std::int64_t(targetY)+offset.j;
-      const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
-      if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
-        const auto& cell = m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
-        if (cell.empty() || (pq.size() == N && cellBeyond(faces, currX, currY, currZ, X, Y, Z, pq.top().dist_sq))) continue;
-        for (const auto& part_idx : cell) {
-          if (part_idx == self) continue;
-          const double dx = m_X[part_idx]-X;
-          const double dy = m_Y[part_idx]-Y;
-          const double dz = m_Z[part_idx]-Z;
-          const double dist_sq = dx*dx+dy*dy+dz*dz;
-          if (pq.size() < N) pq.push({dist_sq, m_toPublic[part_idx]});
-          else if (dist_sq <= pq.top().dist_sq) {
-            const PartNode node = {dist_sq, m_toPublic[part_idx]};
-            if (node < pq.top()) {
-              pq.pop();
-              pq.push(node);
-            }
+      for (const auto& offset : (*m_mask)[maskInd]) {
+        const std::int64_t currX = std::int64_t(targetX)+offset.i;
+        const std::int64_t currY = std::int64_t(targetY)+offset.j;
+        const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
+        if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
+          const auto& cell = m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
+          if (cell.empty() || cellBeyond(faces, currX, currY, currZ, X, Y, Z, pq.T)) continue;
+          for (const auto& part_idx : cell) {
+            if (part_idx == self) continue;
+            const double dx = m_X[part_idx]-X;
+            const double dy = m_Y[part_idx]-Y;
+            const double dz = m_Z[part_idx]-Z;
+            const double dist_sq = dx*dx+dy*dy+dz*dz;
+            if (dist_sq <= pq.T) pq.offer(dist_sq, m_toPublic[part_idx]);
           }
         }
       }
+      maskInd++;
     }
-    maskInd++;
-  }
+  };
 
-  std::vector<unsigned int> finalInd(pq.size());
-  for (size_t i=finalInd.size(); i-- > 0; ) {
-    finalInd[i] = pq.top().index;
-    pq.pop();
+  std::vector<unsigned int> finalInd;
+  if (N <= sorted_limit) {
+    SortedKeep pq(N);
+    walk(pq);
+    pq.finish(finalInd);
+  }
+  else {
+    BufferKeep pq(N);
+    walk(pq);
+    pq.finish(finalInd);
   }
 
   return finalInd;
