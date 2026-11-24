@@ -10,18 +10,34 @@ permissions:
 
 jobs:
   build:
-    name: ${{ matrix.os }}
+    name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - name: Linux GCC
+            os: ubuntu-24.04
+            cc: gcc
+            cxx: g++
+          - name: Linux clang
+            os: ubuntu-24.04
+            cc: clang
+            cxx: clang++
+          - name: macOS Apple clang
+            os: macos-latest
+            cc: clang
+            cxx: clang++
+
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
 
     steps:
       - uses: actions/checkout@v7
 
       - name: Configure
-        run: cmake -S . -B build
+        run: cmake -S . -B build -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
 
       - name: Build
         run: cmake --build build
@@ -29,14 +45,17 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
-      - name: Every translation unit is compiled without FP contraction
+      - name: Every translation unit is compiled without FP contraction or math errno
         run: |
           python3 - <<'PY'
           import json, sys
           entries = json.load(open("build/compile_commands.json"))
-          bad = [e["file"] for e in entries
-                 if "-ffp-contract=off" not in e.get("command", " ".join(e.get("arguments", [])))]
-          print(len(entries), "translation units;", len(bad), "without -ffp-contract=off")
+          bad = 0
+          for flag in ("-ffp-contract=off", "-fno-math-errno"):
+              missing = [e["file"] for e in entries
+                         if flag not in e.get("command", " ".join(e.get("arguments", [])))]
+              print(len(entries), "translation units;", len(missing), "without", flag)
+              bad += len(missing)
           sys.exit(1 if bad or not entries else 0)
           PY
 
@@ -58,31 +77,53 @@ jobs:
           ./build-subproject-consumer/consumer
 
   python:
-    name: python module on ubuntu-latest
-    runs-on: ubuntu-latest
+    name: python ${{ matrix.python }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest]
+        python: ["3.12", "3.14t"]
 
     # The job above builds the static library and links it into executables.
     # This one links it into a shared object, which is a different link and the
-    # one that release wheels and every Linux source install perform.
+    # one that release wheels and every Linux source install perform. On 3.14t
+    # the module is free-threaded, and the GIL test must run, not be skipped.
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
 
+      # pyproject.toml sets MESHSEARCH_BUILD_PYTHON=ON for this build
       - name: Build and install the module
-        # pyproject.toml sets MESHSEARCH_BUILD_PYTHON=ON for this build
-        run: pip install ".[test]"
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install ".[test]"
 
+      # Run from outside the source tree, so that the installed module is the
+      # one imported.
       - name: Test
-        run: pytest tests/test_meshgrid.py
+        working-directory: ${{ runner.temp }}
+        run: >-
+          "$RUNNER_TEMP/venv/bin/python" -m pytest "$GITHUB_WORKSPACE/tests/test_meshgrid.py"
+          -p no:cacheprovider -rs
+
+      - name: The GIL stays off after import
+        if: endsWith(matrix.python, 't')
+        working-directory: ${{ runner.temp }}
+        run: >-
+          "$RUNNER_TEMP/venv/bin/python" -c
+          "import sys, meshsearch; assert not sys._is_gil_enabled()"
 
       # The library is linked into the module with hidden visibility, so the
       # module's dynamic symbol table holds none of its C++ symbols.
       - name: The module exports no meshsearch symbol
+        if: runner.os == 'Linux'
+        working-directory: ${{ runner.temp }}
         run: |
-          module=$(python -c "import meshsearch; print(meshsearch.__file__)")
+          module=$("$RUNNER_TEMP/venv/bin/python" -c "import meshsearch; print(meshsearch.__file__)")
           if nm -D --defined-only "$module" | c++filt | grep "meshsearch::"; then
             exit 1
           fi
@@ -90,6 +131,6 @@ jobs:
       # The C++ install rules are off under scikit-build-core.
       - name: The wheel installs no C++ library or header
         run: |
-          if pip show -f meshsearch | grep -E '\.(a|h)$'; then
+          if "$RUNNER_TEMP/venv/bin/python" -m pip show -f meshsearch | grep -E '\.(a|h)$'; then
             exit 1
           fi

@@ -7,7 +7,7 @@ name = "meshsearch"
 version = "0.2.1"
 description = "A uniform cubic mesh over a set of points, for neighbour queries"
 readme = "README.md"
-requires-python = ">= 3.9"
+requires-python = ">= 3.10"
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
 authors = [{ name = "Simone Sartori" }]
@@ -44,7 +44,7 @@ MESHSEARCH_BUILD_EXAMPLES = "OFF"
 skip = ["*_i686", "*-musllinux_*", "cp315-*", "cp315t-*"]
 # every wheel is tested against the Python suite before it is uploaded
 test-requires = "pytest"
-test-command = "pytest {project}/tests/test_meshgrid.py"
+test-command = "bash {project}/tools/test_wheel.sh {project}"
 
 [tool.cibuildwheel.macos]
 # one arm64 runner builds both, and tests both: the x86_64 wheels are

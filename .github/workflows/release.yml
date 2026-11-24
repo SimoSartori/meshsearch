@@ -60,7 +60,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest]
 
     steps:
       - uses: actions/checkout@v7
@@ -68,6 +68,20 @@ jobs:
       - uses: pypa/cibuildwheel@v4.2.1
         with:
           output-dir: wheelhouse
+
+      # meshsearch installs no C++ library, header, CMake file or example
+      # through its wheels.
+      - name: The wheels hold no C++ library, header, CMake file or example
+        run: |
+          python3 - <<'PY'
+          import glob, sys, zipfile
+          wheels = glob.glob("wheelhouse/*.whl")
+          bad = [f"{w}: {name}" for w in wheels for name in zipfile.ZipFile(w).namelist()
+                 if name.endswith((".a", ".h", ".cmake")) or "examples/" in name]
+          print(len(wheels), "wheels;", len(bad), "C++ library, header, CMake or example files")
+          print("\n".join(bad))
+          sys.exit(1 if bad or not wheels else 0)
+          PY
 
       - uses: actions/upload-artifact@v7
         with:
