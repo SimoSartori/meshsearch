@@ -115,7 +115,7 @@ void meshsearch::MeshGrid::nearestObject (const std::vector<double>& X,
   out.clear();
   out.resize(X.size());
   runQueries(X.size(), m_cells.size(),
-             [&] (const size_t i) { return get_Cell(X[i], Y[i], Z[i]); },
+             [&] (const size_t i) { return get_cell(X[i], Y[i], Z[i]); },
              [&] (const size_t i) { out[i] = nearestObject(X[i], Y[i], Z[i]); });
 }
 
@@ -184,7 +184,7 @@ void meshsearch::MeshGrid::nearestObjects (const unsigned int N,
   out.resize(batchSize(X.size(), N, out.max_size()));
   std::vector<unsigned int> one;
   runQueries(X.size(), m_cells.size(),
-             [&] (const size_t i) { return get_Cell(X[i], Y[i], Z[i]); },
+             [&] (const size_t i) { return get_cell(X[i], Y[i], Z[i]); },
              [&] (const size_t i) {
                nearestObjects(N, X[i], Y[i], Z[i], one);
                std::copy(one.begin(), one.end(), out.begin()+static_cast<std::ptrdiff_t>(i*N));
@@ -257,7 +257,7 @@ void meshsearch::MeshGrid::closeObjects (const std::vector<double>& X,
   checkRadii(Rmax, Rmin);
 
   closeBatch(out, X.size(), m_cells.size(),
-             [&] (const size_t i) { return get_Cell(X[i], Y[i], Z[i]); },
+             [&] (const size_t i) { return get_cell(X[i], Y[i], Z[i]); },
              [&] (std::vector<unsigned int>& one, const size_t i) { closeObjects(X[i], Y[i], Z[i], Rmax, Rmin, one); });
 }
 
@@ -339,7 +339,7 @@ void meshsearch::MeshGrid::countObjects (const std::vector<double>& X,
   out.clear();
   out.resize(X.size());
   runQueries(X.size(), m_cells.size(),
-             [&] (const size_t i) { return get_Cell(X[i], Y[i], Z[i]); },
+             [&] (const size_t i) { return get_cell(X[i], Y[i], Z[i]); },
              [&] (const size_t i) { out[i] = countObjects(X[i], Y[i], Z[i], Rmax, Rmin); });
 }
 
@@ -402,5 +402,5 @@ size_t meshsearch::MeshGrid::objectCell (const unsigned int index) const
 {
   if (!isAlive(index)) return 0;
   const size_t slot = m_toInternal[index];
-  return get_Cell(m_X[slot], m_Y[slot], m_Z[slot]);
+  return get_cell(m_X[slot], m_Y[slot], m_Z[slot]);
 }

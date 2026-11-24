@@ -22,10 +22,3 @@ Errors
 .. doxygenclass:: meshsearch::IndexError
    :project: meshsearch
    :members:
-
-Supporting types
-----------------
-
-.. doxygenstruct:: meshsearch::GridOffset
-   :project: meshsearch
-   :members:

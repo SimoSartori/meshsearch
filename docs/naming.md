@@ -9,8 +9,8 @@ and returns numpy arrays where C++ returns vectors.
 | `MeshGrid(X, Y, Z, cellsize, options)` | `MeshGrid(x, y, z, cellsize, *, limits=None, periodic=False)` | C++ passes `limits` and `periodic` in a `MeshGrid::Options`; Python takes them as keywords |
 | `get_periodic()` | `grid.periodic` | property; a tuple of three bools in Python |
 | `get_nObjects()` | `len(grid)` | live objects, removals excluded |
-| `isAlive(index)` | `is_alive(index)` | |
-| `get_lims()` | `grid.lims` | property; a 3×2 array in Python |
+| `isAlive(index)` | `is_alive(index)` | the one member taking an index that does not raise |
+| `get_lims()` | `grid.lims` | property; `std::array<std::array<double,2>,3>` in C++, a 3×2 array in Python |
 | `get_nCells()` | `grid.n_cells` | property; a tuple in Python |
 | `get_cellsize()` | `grid.cellsize` | property |
 | `nearestObject(X, Y, Z)` | `nearest_object(x, y, z)` | |
@@ -30,9 +30,9 @@ and returns numpy arrays where C++ returns vectors.
 | `closeObjects(indices, Rmax, Rmin)` | `close_objects(indices, rmax, rmin)` | |
 | `countObjects(indices, Rmax, Rmin)` | `count_objects(indices, rmax, rmin, *, out=None)` | |
 | `MeshGrid::Batch` | — | `indices` and `offsets` members; Python returns the two arrays |
-| `get_Cell(X, Y, Z)` | `get_cell(x, y, z)` | |
-| `get_CellCoords(X, Y, Z)` | `get_cell_coords(x, y, z)` | |
-| `get_ObjectsInCell(X, Y, Z)` | `get_objects_in_cell(x, y, z)` | |
+| `get_cell(X, Y, Z)` | `get_cell(x, y, z)` | |
+| `get_cellCoords(X, Y, Z)` | `get_cell_coords(x, y, z)` | |
+| `get_objectsInCell(X, Y, Z)` | `get_objects_in_cell(x, y, z)` | |
 | `addObject(X, Y, Z)` | `add_object(x, y, z)` | returns the new index |
 | `removeObject(index)` | `remove_object(index)` | |
 | `meshsearch::Error` | `meshsearch.Error` | derives from `ValueError` in Python |

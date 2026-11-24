@@ -4,19 +4,21 @@
 // right, which is all a consumer's build can tell about the packaging.
 
 #include <meshsearch/MeshGrid.h>
+#include <meshsearch/Version.h>
 
 #include <cstdio>
 
 int main ()
 {
-  const meshsearch::MeshGrid grid({0.1, 0.5, 0.9}, {0.1, 0.5, 0.9}, {0.1, 0.5, 0.9}, 0.25,
-                                  {{0., 1.}, {0., 1.}, {0., 1.}});
+  meshsearch::MeshGrid::Options opt;
+  opt.limits = {{{0., 1.}, {0., 1.}, {0., 1.}}};
+  const meshsearch::MeshGrid grid({0.1, 0.5, 0.9}, {0.1, 0.5, 0.9}, {0.1, 0.5, 0.9}, 0.25, opt);
 
   if (grid.nearestObject(0.45, 0.45, 0.45) != 1) {
     std::printf("wrong nearest object\n");
     return 1;
   }
 
-  std::printf("meshsearch consumer: ok\n");
+  std::printf("meshsearch %s consumer: ok\n", MESHSEARCH_VERSION);
   return 0;
 }
