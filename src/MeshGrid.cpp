@@ -28,6 +28,32 @@ namespace {
 
   const double far_reach = 3.46413;
 
+  const size_t scan_chunk = 64;
+
+  const unsigned int min_block = 4;
+
+  const size_t no_slot = std::numeric_limits<size_t>::max();
+
+  template <class Visit>
+  void scanBlock (const double* x, const double* y, const double* z, const size_t n,
+                  const double X, const double Y, const double Z, Visit&& visit)
+  {
+    double dist_sq[scan_chunk];
+    for (size_t base=0; base<n; base+=scan_chunk) {
+      const size_t m = std::min(scan_chunk, n-base);
+      const double* xb = x+base;
+      const double* yb = y+base;
+      const double* zb = z+base;
+      for (size_t k=0; k<m; ++k) {
+        const double dx = xb[k]-X;
+        const double dy = yb[k]-Y;
+        const double dz = zb[k]-Z;
+        dist_sq[k] = dx*dx+dy*dy+dz*dz;
+      }
+      for (size_t k=0; k<m; ++k) visit(base+k, dist_sq[k]);
+    }
+  }
+
   bool checkedProduct (const std::uint64_t a, const std::uint64_t b, std::uint64_t& out)
   {
     if (a != 0 && b > std::numeric_limits<std::uint64_t>::max()/a) return false;
@@ -337,7 +363,7 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
   std::uint64_t total = 0, entries = 0;
   if (!checkedProduct(nx, ny, total) || !checkedProduct(total, nz, total) || !checkedProduct(total, 8, entries))
     throw Error(too_many_cells);
-  if (total >= std::vector<size_t>().max_size() || total > std::vector<std::vector<unsigned int>>().max_size()
+  if (total >= std::vector<size_t>().max_size() || total > std::vector<CellBlock>().max_size()
       || entries > std::vector<GridOffset>().max_size())
     throw Error(too_many_cells);
 
@@ -378,47 +404,38 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
   m_mask = mask;
 
   const size_t total_cells = static_cast<size_t>(total);
-  m_grid.assign(total_cells, std::vector<unsigned int>());
+  m_cells.assign(total_cells, CellBlock{0, 0, 0});
 
   const size_t n = X.size();
 
   std::vector<size_t> cell(n);
-  std::vector<size_t> offset(total_cells+1, 0);
 
   for (size_t i=0; i<n; ++i) {
     const auto coords = locate(m_lims, m_nCells, m_cellsize, X[i], Y[i], Z[i]);
     cell[i] = getLinearIndex(coords[0], coords[1], coords[2]);
-    offset[cell[i]+1]++;
+    m_cells[cell[i]].cap++;
   }
 
-  for (size_t c=0; c<total_cells; ++c) offset[c+1] += offset[c];
-
-  m_toPublic.resize(n);
-  m_toInternal.resize(n);
-
-  for (size_t i=0; i<n; ++i) {
-    const size_t internal = offset[cell[i]]++;
-    m_toPublic[internal] = static_cast<unsigned int>(i);
-    m_toInternal[i] = static_cast<unsigned int>(internal);
+  size_t start = 0;
+  for (auto& block : m_cells) {
+    block.start = start;
+    start += block.cap;
   }
 
   m_X.resize(n);
   m_Y.resize(n);
   m_Z.resize(n);
+  m_toPublic.resize(n);
+  m_toInternal.resize(n);
 
-  for (size_t k=0; k<n; ++k) {
-    const unsigned int index = m_toPublic[k];
-    m_X[k] = X[index];
-    m_Y[k] = Y[index];
-    m_Z[k] = Z[index];
-  }
-
-  size_t start = 0;
-  for (size_t c=0; c<total_cells; ++c) {
-    const size_t end = offset[c];
-    m_grid[c].reserve(end-start);
-    for (size_t k=start; k<end; ++k) m_grid[c].push_back(static_cast<unsigned int>(k));
-    start = end;
+  for (size_t i=0; i<n; ++i) {
+    CellBlock& block = m_cells[cell[i]];
+    const size_t slot = block.start+block.count++;
+    m_X[slot] = X[i];
+    m_Y[slot] = Y[i];
+    m_Z[slot] = Z[i];
+    m_toPublic[slot] = static_cast<unsigned int>(i);
+    m_toInternal[i] = slot;
   }
 
   m_alive.assign(n, 1);
@@ -499,7 +516,7 @@ unsigned int meshsearch::MeshGrid::nearestObject (const double X, const double Y
   const CellFaces faces = cellFaces(m_lims, m_nCells, m_cellsize);
 
   double min_dist_sq = std::numeric_limits<double>::max();
-  unsigned int finalInd = std::numeric_limits<unsigned int>::max();
+  size_t finalSlot = no_slot;
   unsigned int maskInd = 0;
 
   while (maskInd < m_mask->size()) {
@@ -510,27 +527,25 @@ unsigned int meshsearch::MeshGrid::nearestObject (const double X, const double Y
       const std::int64_t currY = std::int64_t(targetY)+offset.j;
       const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
       if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
-        const auto& cell = m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
-        if (cell.empty() || cellBeyond(faces, currX, currY, currZ, X, Y, Z, min_dist_sq)) continue;
-        for (const auto& part_idx : cell) {
-          const double dx = m_X[part_idx]-X;
-          const double dy = m_Y[part_idx]-Y;
-          const double dz = m_Z[part_idx]-Z;
-          const double dist_sq_temp = dx*dx+dy*dy+dz*dz;
-          if (finalInd == std::numeric_limits<unsigned int>::max() || dist_sq_temp < min_dist_sq) {
-            min_dist_sq = dist_sq_temp;
-            finalInd = part_idx;
-          }
-        }
+        const CellBlock& block = m_cells[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
+        if (block.count == 0 || cellBeyond(faces, currX, currY, currZ, X, Y, Z, min_dist_sq)) continue;
+        const size_t first = block.start;
+        scanBlock(m_X.data()+first, m_Y.data()+first, m_Z.data()+first, block.count, X, Y, Z,
+                  [&] (const size_t k, const double dist_sq) {
+                    if (finalSlot == no_slot || dist_sq < min_dist_sq) {
+                      min_dist_sq = dist_sq;
+                      finalSlot = first+k;
+                    }
+                  });
       }
     }
     maskInd++;
   }
 
-  if (finalInd == std::numeric_limits<unsigned int>::max())
+  if (finalSlot == no_slot)
     throw Error("no object found");
 
-  return m_toPublic[finalInd];
+  return m_toPublic[finalSlot];
 }
 
 
@@ -542,7 +557,7 @@ unsigned int meshsearch::MeshGrid::nearestObject (const unsigned int index) cons
   checkIndex(m_alive, index);
   if (m_nObjects < 2) throw Error("no other object remains in the grid");
 
-  const unsigned int self = m_toInternal[index];
+  const size_t self = m_toInternal[index];
   const double X = m_X[self];
   const double Y = m_Y[self];
   const double Z = m_Z[self];
@@ -559,7 +574,7 @@ unsigned int meshsearch::MeshGrid::nearestObject (const unsigned int index) cons
   const CellFaces faces = cellFaces(m_lims, m_nCells, m_cellsize);
 
   double min_dist_sq = std::numeric_limits<double>::max();
-  unsigned int finalInd = std::numeric_limits<unsigned int>::max();
+  size_t finalSlot = no_slot;
   unsigned int maskInd = 0;
 
   while (maskInd < m_mask->size()) {
@@ -570,28 +585,26 @@ unsigned int meshsearch::MeshGrid::nearestObject (const unsigned int index) cons
       const std::int64_t currY = std::int64_t(targetY)+offset.j;
       const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
       if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
-        const auto& cell = m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
-        if (cell.empty() || cellBeyond(faces, currX, currY, currZ, X, Y, Z, min_dist_sq)) continue;
-        for (const auto& part_idx : cell) {
-          if (part_idx == self) continue;
-          const double dx = m_X[part_idx]-X;
-          const double dy = m_Y[part_idx]-Y;
-          const double dz = m_Z[part_idx]-Z;
-          const double dist_sq_temp = dx*dx+dy*dy+dz*dz;
-          if (finalInd == std::numeric_limits<unsigned int>::max() || dist_sq_temp < min_dist_sq) {
-            min_dist_sq = dist_sq_temp;
-            finalInd = part_idx;
-          }
-        }
+        const CellBlock& block = m_cells[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
+        if (block.count == 0 || cellBeyond(faces, currX, currY, currZ, X, Y, Z, min_dist_sq)) continue;
+        const size_t first = block.start;
+        scanBlock(m_X.data()+first, m_Y.data()+first, m_Z.data()+first, block.count, X, Y, Z,
+                  [&] (const size_t k, const double dist_sq) {
+                    if (first+k == self) return;
+                    if (finalSlot == no_slot || dist_sq < min_dist_sq) {
+                      min_dist_sq = dist_sq;
+                      finalSlot = first+k;
+                    }
+                  });
       }
     }
     maskInd++;
   }
 
-  if (finalInd == std::numeric_limits<unsigned int>::max())
+  if (finalSlot == no_slot)
     throw Error("no object found");
 
-  return m_toPublic[finalInd];
+  return m_toPublic[finalSlot];
 }
 
 
@@ -627,15 +640,14 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
         const std::int64_t currY = std::int64_t(targetY)+offset.j;
         const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
         if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
-          const auto& cell = m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
-          if (cell.empty() || cellBeyond(faces, currX, currY, currZ, X, Y, Z, pq.T)) continue;
-          for (const auto& part_idx : cell) {
-            const double dx = m_X[part_idx]-X;
-            const double dy = m_Y[part_idx]-Y;
-            const double dz = m_Z[part_idx]-Z;
-            const double dist_sq = dx*dx+dy*dy+dz*dz;
-            if (dist_sq <= pq.T) pq.offer(dist_sq, m_toPublic[part_idx]);
-          }
+          const CellBlock& block = m_cells[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
+          if (block.count == 0 || cellBeyond(faces, currX, currY, currZ, X, Y, Z, pq.T)) continue;
+          const size_t first = block.start;
+          const unsigned int* pub = m_toPublic.data()+first;
+          scanBlock(m_X.data()+first, m_Y.data()+first, m_Z.data()+first, block.count, X, Y, Z,
+                    [&] (const size_t k, const double dist_sq) {
+                      if (dist_sq <= pq.T) pq.offer(dist_sq, pub[k]);
+                    });
         }
       }
       maskInd++;
@@ -668,7 +680,7 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
   if (N >= m_nObjects) throw Error("N is larger than the number of available neighbours");
   if (N == 0) return {};
 
-  const unsigned int self = m_toInternal[index];
+  const size_t self = m_toInternal[index];
   const double X = m_X[self];
   const double Y = m_Y[self];
   const double Z = m_Z[self];
@@ -696,16 +708,14 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
         const std::int64_t currY = std::int64_t(targetY)+offset.j;
         const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
         if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
-          const auto& cell = m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
-          if (cell.empty() || cellBeyond(faces, currX, currY, currZ, X, Y, Z, pq.T)) continue;
-          for (const auto& part_idx : cell) {
-            if (part_idx == self) continue;
-            const double dx = m_X[part_idx]-X;
-            const double dy = m_Y[part_idx]-Y;
-            const double dz = m_Z[part_idx]-Z;
-            const double dist_sq = dx*dx+dy*dy+dz*dz;
-            if (dist_sq <= pq.T) pq.offer(dist_sq, m_toPublic[part_idx]);
-          }
+          const CellBlock& block = m_cells[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
+          if (block.count == 0 || cellBeyond(faces, currX, currY, currZ, X, Y, Z, pq.T)) continue;
+          const size_t first = block.start;
+          const unsigned int* pub = m_toPublic.data()+first;
+          scanBlock(m_X.data()+first, m_Y.data()+first, m_Z.data()+first, block.count, X, Y, Z,
+                    [&] (const size_t k, const double dist_sq) {
+                      if (first+k != self && dist_sq <= pq.T) pq.offer(dist_sq, pub[k]);
+                    });
         }
       }
       maskInd++;
@@ -763,20 +773,17 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const double X, co
       const std::int64_t currY = std::int64_t(targetY)+offset.j;
       const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
       if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
-        const auto& cell = m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
-        if (cell.empty() || cellBeyond(faces, currX, currY, currZ, X, Y, Z, Rmax_sq)) continue;
-        for (const auto& part_idx : cell) {
-          const double dx = m_X[part_idx]-X;
-          const double dy = m_Y[part_idx]-Y;
-          const double dz = m_Z[part_idx]-Z;
-          const double dist_sq = dx*dx+dy*dy+dz*dz;
-          if (dist_sq <= Rmax_sq && dist_sq >= Rmin_sq) finalInd.push_back(part_idx);
-        }
+        const CellBlock& block = m_cells[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
+        if (block.count == 0 || cellBeyond(faces, currX, currY, currZ, X, Y, Z, Rmax_sq)) continue;
+        const size_t first = block.start;
+        const unsigned int* pub = m_toPublic.data()+first;
+        scanBlock(m_X.data()+first, m_Y.data()+first, m_Z.data()+first, block.count, X, Y, Z,
+                  [&] (const size_t k, const double dist_sq) {
+                    if (dist_sq <= Rmax_sq && dist_sq >= Rmin_sq) finalInd.push_back(pub[k]);
+                  });
       }
     }
   }
-
-  for (auto& part_idx : finalInd) part_idx = m_toPublic[part_idx];
 
   return finalInd;
 }
@@ -791,7 +798,7 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const unsigned int
   checkIndex(m_alive, index);
   checkRadii(Rmax, Rmin);
 
-  const unsigned int self = m_toInternal[index];
+  const size_t self = m_toInternal[index];
   const double X = m_X[self];
   const double Y = m_Y[self];
   const double Z = m_Z[self];
@@ -823,21 +830,17 @@ std::vector<unsigned int> meshsearch::MeshGrid::closeObjects (const unsigned int
       const std::int64_t currY = std::int64_t(targetY)+offset.j;
       const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
       if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
-        const auto& cell = m_grid[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
-        if (cell.empty() || cellBeyond(faces, currX, currY, currZ, X, Y, Z, Rmax_sq)) continue;
-        for (const auto& part_idx : cell) {
-          if (part_idx == self) continue;
-          const double dx = m_X[part_idx]-X;
-          const double dy = m_Y[part_idx]-Y;
-          const double dz = m_Z[part_idx]-Z;
-          const double dist_sq = dx*dx+dy*dy+dz*dz;
-          if (dist_sq <= Rmax_sq && dist_sq >= Rmin_sq) finalInd.push_back(part_idx);
-        }
+        const CellBlock& block = m_cells[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
+        if (block.count == 0 || cellBeyond(faces, currX, currY, currZ, X, Y, Z, Rmax_sq)) continue;
+        const size_t first = block.start;
+        const unsigned int* pub = m_toPublic.data()+first;
+        scanBlock(m_X.data()+first, m_Y.data()+first, m_Z.data()+first, block.count, X, Y, Z,
+                  [&] (const size_t k, const double dist_sq) {
+                    if (first+k != self && dist_sq <= Rmax_sq && dist_sq >= Rmin_sq) finalInd.push_back(pub[k]);
+                  });
       }
     }
   }
-
-  for (auto& part_idx : finalInd) part_idx = m_toPublic[part_idx];
 
   return finalInd;
 }
@@ -868,11 +871,9 @@ std::array<unsigned int, 3> meshsearch::MeshGrid::get_CellCoords (const double X
 std::vector<unsigned int> meshsearch::MeshGrid::get_ObjectsInCell (const double X, const double Y, const double Z) const
 {
   const auto coords = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
-  std::vector<unsigned int> objects = m_grid[getLinearIndex(coords[0], coords[1], coords[2])];
-
-  for (auto& part_idx : objects) part_idx = m_toPublic[part_idx];
-
-  return objects;
+  const CellBlock& block = m_cells[getLinearIndex(coords[0], coords[1], coords[2])];
+  const auto first = m_toPublic.begin()+static_cast<std::ptrdiff_t>(block.start);
+  return std::vector<unsigned int>(first, first+block.count);
 }
 
 
@@ -883,11 +884,20 @@ void meshsearch::MeshGrid::removeObject (const unsigned int index)
 {
   checkIndex(m_alive, index);
 
-  const unsigned int internal = m_toInternal[index];
+  const size_t slot = m_toInternal[index];
 
-  const auto coords = locate(m_lims, m_nCells, m_cellsize, m_X[internal], m_Y[internal], m_Z[internal]);
-  auto& cell = m_grid[getLinearIndex(coords[0], coords[1], coords[2])];
-  cell.erase(std::remove(cell.begin(), cell.end(), internal), cell.end());
+  const auto coords = locate(m_lims, m_nCells, m_cellsize, m_X[slot], m_Y[slot], m_Z[slot]);
+  CellBlock& block = m_cells[getLinearIndex(coords[0], coords[1], coords[2])];
+
+  const size_t end = block.start+block.count;
+  for (size_t k=slot+1; k<end; ++k) {
+    m_X[k-1] = m_X[k];
+    m_Y[k-1] = m_Y[k];
+    m_Z[k-1] = m_Z[k];
+    m_toPublic[k-1] = m_toPublic[k];
+    m_toInternal[m_toPublic[k-1]] = k-1;
+  }
+  block.count--;
 
   m_alive[index] = 0;
   m_nObjects--;
@@ -904,30 +914,60 @@ unsigned int meshsearch::MeshGrid::addObject (const double X, const double Y, co
     throw Error("too many objects: at most 4294967295 indices can be issued");
 
   const unsigned int index = static_cast<unsigned int>(m_toInternal.size());
-  const unsigned int internal = static_cast<unsigned int>(m_X.size());
+  const size_t target = getLinearIndex(coords[0], coords[1], coords[2]);
 
-  auto& cell = m_grid[getLinearIndex(coords[0], coords[1], coords[2])];
+  if (m_cells[target].count == m_cells[target].cap) {
+    CellBlock& block = m_cells[target];
+    const unsigned int count = block.count;
+    const unsigned int cap = (count >= max_objects/2) ? max_objects : std::max(2*count, min_block);
+    const size_t slots = m_X.size();
+    const size_t base = (block.start+block.cap == slots) ? block.start : slots;
+    const size_t grown = base+cap;
 
-  int pushed = 0;
+    try {
+      m_X.resize(grown);
+      m_Y.resize(grown);
+      m_Z.resize(grown);
+      m_toPublic.resize(grown);
+    }
+    catch (...) {
+      m_X.resize(slots);
+      m_Y.resize(slots);
+      m_Z.resize(slots);
+      m_toPublic.resize(slots);
+      throw;
+    }
+
+    if (base != block.start) {
+      for (size_t k=0; k<count; ++k) {
+        m_X[base+k] = m_X[block.start+k];
+        m_Y[base+k] = m_Y[block.start+k];
+        m_Z[base+k] = m_Z[block.start+k];
+        m_toPublic[base+k] = m_toPublic[block.start+k];
+        m_toInternal[m_toPublic[base+k]] = base+k;
+      }
+      block.start = base;
+    }
+    block.cap = cap;
+  }
+
+  CellBlock& block = m_cells[target];
+  const size_t slot = block.start+block.count;
+
+  m_toInternal.push_back(slot);
   try {
-    m_X.push_back(X); ++pushed;
-    m_Y.push_back(Y); ++pushed;
-    m_Z.push_back(Z); ++pushed;
-    m_toInternal.push_back(internal); ++pushed;
-    m_toPublic.push_back(index); ++pushed;
-    m_alive.push_back(1); ++pushed;
-    cell.push_back(internal);
+    m_alive.push_back(1);
   }
   catch (...) {
-    if (pushed > 5) m_alive.pop_back();
-    if (pushed > 4) m_toPublic.pop_back();
-    if (pushed > 3) m_toInternal.pop_back();
-    if (pushed > 2) m_Z.pop_back();
-    if (pushed > 1) m_Y.pop_back();
-    if (pushed > 0) m_X.pop_back();
+    m_toInternal.pop_back();
     throw;
   }
 
+  m_X[slot] = X;
+  m_Y[slot] = Y;
+  m_Z[slot] = Z;
+  m_toPublic[slot] = index;
+  block.count++;
   m_nObjects++;
 
   return index;
