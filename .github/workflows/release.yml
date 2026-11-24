@@ -22,14 +22,25 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: The tag must match the version in pyproject.toml
-        if: github.event_name == 'push'
+      # The version lives in pyproject.toml and CMakeLists.txt; on a tag push
+      # the tag must name it too, and the changelog must carry the release date.
+      - name: The versions agree
         run: |
-          tag="${GITHUB_REF_NAME#v}"
           version=$(python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
-          if [ "$tag" != "$version" ]; then
-            echo "tag $GITHUB_REF_NAME does not match version $version in pyproject.toml"
+          cmake_version=$(sed -nE 's/^project\(meshsearch VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)
+          if [ "$version" != "$cmake_version" ]; then
+            echo "pyproject.toml says $version and CMakeLists.txt $cmake_version"
             exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+              echo "tag $GITHUB_REF_NAME does not match version $version"
+              exit 1
+            fi
+            if ! grep -qE "^## $version — [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md; then
+              echo "CHANGELOG.md has no heading '## $version — YYYY-MM-DD' with a date"
+              exit 1
+            fi
           fi
 
       - name: Build
