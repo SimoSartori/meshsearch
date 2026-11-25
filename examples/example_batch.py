@@ -2,7 +2,7 @@
 
 Crossing the Python boundary costs about a microsecond per call, which is real
 work when the query itself takes one or two. The batched forms hand the whole
-array of query points across once, and a batch of 10**5 query points or more
+array of query points across once, and a large batch
 is answered in an order that follows the grid's cells, which is faster again.
 Results always come back in query order.
 

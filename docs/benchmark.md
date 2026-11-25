@@ -177,11 +177,10 @@ by less than 10 per cent.
 
 ## Large batches
 
-A batch of 10⁵ query points or more is answered internally in the order of
-the cells, and the results are returned in input order. One call of 10⁵ or
+A large batch is answered internally in the order of the cells, and the
+results are returned in input order. One call of 10⁵ or
 10⁶ fresh uniform query points in random order; the *input order* columns are
-the same points asked in batches of 50,000, which are answered in the order
-given. In µs per query.
+the same points in batches small enough to be answered in the order given. In µs per query.
 
 | grid | queries | query | meshsearch, 1 *s* | input order, 1 *s* | meshsearch, 4 *s* | input order, 4 *s* | cKDTree |
 |---|---|---|---|---|---|---|---|
