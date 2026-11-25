@@ -8,6 +8,7 @@ the resident-set growth caused by holding that one structure.
     python benchmarks/benchmark.py --periodic --sizes 1000000 10000000
     python benchmarks/benchmark.py --large-batch --sizes 1000000 10000000
     python benchmarks/benchmark.py --one meshsearch 100000 --factor 4 --dist clustered   # one, as JSON
+    python benchmarks/benchmark.py --queries repeat     # the same 1000 queries in every repetition
 
 Nothing here is tuned to favour any library. meshsearch is given a cell side
 that is a stated multiple of the mean separation, and every structure is built
@@ -26,6 +27,13 @@ unit cube, so the same points serve the periodic and the non-periodic runs.
 cKDTree(boxsize=1); BallTree has no periodic mode and is left out.
 --large-batch times one call of 1e5 and 1e6 queries on uniform data, which is
 where meshsearch runs a batch in cell order (it does from 1e5 queries).
+
+--queries fresh (the default) draws new query points for every repetition,
+10,000 per repetition (1e5 or 1e6 with --large-batch), the same draws for every
+library, so that no repetition finds the cells or tree nodes it visits in cache
+from an earlier one. --queries repeat runs the same 1000 query points (the
+same large batch) in every repetition, which measures a working set that is
+already in cache.
 """
 
 import argparse
@@ -40,7 +48,8 @@ import numpy as np
 SIZES = [100_000, 1_000_000, 10_000_000]
 LIBRARIES = ["meshsearch", "cKDTree", "BallTree"]
 
-N_QUERIES = 1000
+N_QUERIES = {"fresh": 10_000, "repeat": 1000}
+REPEATS = 3
 K = 10
 SEED = 20260921
 LARGE_BATCHES = [100_000, 1_000_000]
@@ -79,10 +88,17 @@ def points(n, dist="uniform"):
     return thomas(n, n, SEED)
 
 
-def query_points(n_queries, n=0, dist="uniform"):
+def query_points(n_queries, n=0, dist="uniform", seed=SEED + 1):
     if dist == "uniform":
-        return np.random.default_rng(SEED + 1).random((n_queries, 3))
-    return thomas(n, n_queries, SEED + 1)
+        return np.random.default_rng(seed).random((n_queries, 3))
+    return thomas(n, n_queries, seed)
+
+
+def query_sets(n_queries, n, dist, mode, first_seed, reps=REPEATS):
+    """One set of query points per repetition: new ones each time if fresh, else one set repeated."""
+    if mode == "fresh":
+        return [query_points(n_queries, n, dist, first_seed + 1000 * r) for r in range(reps)]
+    return [query_points(n_queries, n, dist, first_seed)] * reps
 
 
 def columns(a):
@@ -101,19 +117,20 @@ def rss_mib():
     return psutil.Process().memory_info().rss / 2 ** 20
 
 
-def timed(fn, repeats):
-    """Median wall time of `repeats` runs, in seconds."""
+def timed(fn, sets):
+    """Median wall time of fn over the query sets, one run per set, in seconds."""
     samples = []
-    for _ in range(repeats):
+    for q in sets:
         t = time.perf_counter()
-        fn()
+        fn(q)
         samples.append(time.perf_counter() - t)
     return float(np.median(samples))
 
 
-def run_one(library, n, factor=1, dist="uniform", periodic=False):
+def run_one(library, n, factor=1, dist="uniform", periodic=False, mode="fresh"):
     data = points(n, dist)
-    queries = query_points(N_QUERIES, n, dist)
+    sets = query_sets(N_QUERIES[mode], n, dist, mode, SEED + 1)
+    csets = [columns(q) for q in sets]
     mps = n ** (-1 / 3)
     radius = 2 * mps
     cellsize = factor * mps
@@ -123,7 +140,7 @@ def run_one(library, n, factor=1, dist="uniform", periodic=False):
     before = rss_mib()
 
     result = {"library": library, "n": n, "k": K, "radius": radius, "factor": factor,
-              "n_queries": N_QUERIES, "periodic": periodic}
+              "n_queries": N_QUERIES[mode], "queries": mode, "periodic": periodic}
     result.update(describe(dist, n))
 
     if library == "meshsearch":
@@ -136,19 +153,17 @@ def run_one(library, n, factor=1, dist="uniform", periodic=False):
         result["cellsize_used"] = grid.cellsize
 
         result["nn_loop_s"] = timed(
-            lambda: [grid.nearest_object(*p) for p in queries], 3)
+            lambda q: [grid.nearest_object(*p) for p in q], sets)
         result["knn_loop_s"] = timed(
-            lambda: [grid.nearest_objects(K, *p) for p in queries], 3)
+            lambda q: [grid.nearest_objects(K, *p) for p in q], sets)
         result["radius_loop_s"] = timed(
-            lambda: [grid.close_objects(*p, radius) for p in queries], 3)
+            lambda q: [grid.close_objects(*p, radius) for p in q], sets)
 
         # the batched forms, which the bindings add and the C++ library does not
-        qx, qy, qz = columns(queries)
-        result["nn_batch_s"] = timed(lambda: grid.nearest_object(qx, qy, qz), 3)
-        result["knn_batch_s"] = timed(lambda: grid.nearest_objects(K, qx, qy, qz), 3)
-        result["radius_batch_s"] = timed(lambda: grid.close_objects(qx, qy, qz, radius), 3)
-        result["radius_count"] = float(np.mean(
-            [grid.close_objects(*p, radius).size for p in queries]))
+        result["nn_batch_s"] = timed(lambda c: grid.nearest_object(*c), csets)
+        result["knn_batch_s"] = timed(lambda c: grid.nearest_objects(K, *c), csets)
+        result["radius_batch_s"] = timed(lambda c: grid.close_objects(*c, radius), csets)
+        result["radius_count"] = float(np.mean(grid.count_objects(*csets[0], radius)))
         del grid
 
     elif library == "cKDTree":
@@ -159,18 +174,18 @@ def run_one(library, n, factor=1, dist="uniform", periodic=False):
         result["build_s"] = time.perf_counter() - t
         result["memory_mib"] = rss_mib() - before
 
-        result["nn_batch_s"] = timed(lambda: tree.query(queries, k=1), 3)
-        result["knn_batch_s"] = timed(lambda: tree.query(queries, k=K), 3)
+        result["nn_batch_s"] = timed(lambda q: tree.query(q, k=1), sets)
+        result["knn_batch_s"] = timed(lambda q: tree.query(q, k=K), sets)
         result["radius_batch_s"] = timed(
-            lambda: tree.query_ball_point(queries, radius), 3)
+            lambda q: tree.query_ball_point(q, radius), sets)
         result["nn_loop_s"] = timed(
-            lambda: [tree.query(p, k=1) for p in queries], 3)
+            lambda q: [tree.query(p, k=1) for p in q], sets)
         result["knn_loop_s"] = timed(
-            lambda: [tree.query(p, k=K) for p in queries], 3)
+            lambda q: [tree.query(p, k=K) for p in q], sets)
         result["radius_loop_s"] = timed(
-            lambda: [tree.query_ball_point(p, radius) for p in queries], 3)
+            lambda q: [tree.query_ball_point(p, radius) for p in q], sets)
         result["radius_count"] = float(np.mean(
-            [len(tree.query_ball_point(p, radius)) for p in queries]))
+            tree.query_ball_point(sets[0], radius, return_length=True)))
         del tree
 
     elif library == "BallTree":
@@ -182,18 +197,18 @@ def run_one(library, n, factor=1, dist="uniform", periodic=False):
         result["build_s"] = time.perf_counter() - t
         result["memory_mib"] = rss_mib() - before
 
-        result["nn_batch_s"] = timed(lambda: tree.query(queries, k=1), 3)
-        result["knn_batch_s"] = timed(lambda: tree.query(queries, k=K), 3)
+        result["nn_batch_s"] = timed(lambda q: tree.query(q, k=1), sets)
+        result["knn_batch_s"] = timed(lambda q: tree.query(q, k=K), sets)
         result["radius_batch_s"] = timed(
-            lambda: tree.query_radius(queries, radius), 3)
+            lambda q: tree.query_radius(q, radius), sets)
         result["nn_loop_s"] = timed(
-            lambda: [tree.query(p.reshape(1, -1), k=1) for p in queries], 3)
+            lambda q: [tree.query(p.reshape(1, -1), k=1) for p in q], sets)
         result["knn_loop_s"] = timed(
-            lambda: [tree.query(p.reshape(1, -1), k=K) for p in queries], 3)
+            lambda q: [tree.query(p.reshape(1, -1), k=K) for p in q], sets)
         result["radius_loop_s"] = timed(
-            lambda: [tree.query_radius(p.reshape(1, -1), radius) for p in queries], 3)
+            lambda q: [tree.query_radius(p.reshape(1, -1), radius) for p in q], sets)
         result["radius_count"] = float(np.mean(
-            [tree.query_radius(p.reshape(1, -1), radius)[0].size for p in queries]))
+            tree.query_radius(sets[0], radius, count_only=True)))
         del tree
 
     else:
@@ -202,7 +217,7 @@ def run_one(library, n, factor=1, dist="uniform", periodic=False):
     return result
 
 
-def run_large(library, n, factor=1, batches=LARGE_BATCHES, reps=3):
+def run_large(library, n, factor=1, batches=LARGE_BATCHES, reps=REPEATS, mode="fresh"):
     """One call of each query kind over a large batch, on uniform data.
 
     For meshsearch the batch is also cut into chunks of 50,000 queries, below
@@ -215,7 +230,7 @@ def run_large(library, n, factor=1, batches=LARGE_BATCHES, reps=3):
     x, y, z = columns(data)
     gc.collect()
     result = {"library": library, "n": n, "factor": factor, "k": K, "radius": radius,
-              "reps": reps, "dist": "uniform", "batches": {}}
+              "reps": reps, "queries": mode, "dist": "uniform", "batches": {}}
 
     if library == "meshsearch":
         import meshsearch
@@ -234,19 +249,20 @@ def run_large(library, n, factor=1, batches=LARGE_BATCHES, reps=3):
 
     chunk = 50_000
     for nq in batches:
-        queries = np.random.default_rng(SEED + 2).random((nq, 3))
-        qx, qy, qz = columns(queries)
+        sets = query_sets(nq, n, "uniform", mode, SEED + 2, reps)
+        csets = [columns(q) for q in sets]
         row = {}
         for kind, call in calls.items():
             if library == "meshsearch":
-                row[f"{kind}_batch_s"] = timed(lambda: call(qx, qy, qz), reps)
+                row[f"{kind}_batch_s"] = timed(lambda c: call(*c), csets)
             else:
-                row[f"{kind}_batch_s"] = timed(lambda: call(queries), reps)
+                row[f"{kind}_batch_s"] = timed(lambda q: call(q), sets)
             if library == "meshsearch" and nq > chunk:
-                def chunked():
+                def chunked(c):
+                    qx, qy, qz = c
                     for lo in range(0, nq, chunk):
                         call(qx[lo:lo + chunk], qy[lo:lo + chunk], qz[lo:lo + chunk])
-                row[f"{kind}_chunked_s"] = timed(chunked, reps)
+                row[f"{kind}_chunked_s"] = timed(chunked, csets)
         result["batches"][str(nq)] = row
     return result
 
@@ -273,16 +289,18 @@ def main():
     parser.add_argument("--periodic", action="store_true",
                         help="meshsearch all-periodic against cKDTree(boxsize=1)")
     parser.add_argument("--large-batch", action="store_true")
-    parser.add_argument("--reps", type=int, default=3, help="repetitions of the large batches")
+    parser.add_argument("--reps", type=int, default=REPEATS, help="repetitions of the large batches")
+    parser.add_argument("--queries", choices=["fresh", "repeat"], default="fresh",
+                        help="new query points for every repetition (default), or the same ones")
     args = parser.parse_args()
 
     if args.one:
         print(json.dumps(run_one(args.one[0], int(args.one[1]), args.factor, args.dist,
-                                 args.periodic)))
+                                 args.periodic, args.queries)))
         return
     if args.one_large:
         print(json.dumps(run_large(args.one_large[0], int(args.one_large[1]), args.factor,
-                                   reps=args.reps)))
+                                   reps=args.reps, mode=args.queries)))
         return
 
     results = []
@@ -297,10 +315,11 @@ def main():
                     t = time.perf_counter()
                     if args.large_batch:
                         row = spawn(["--one-large", library, str(n), "--factor", str(factor),
-                                     "--reps", str(args.reps)])
+                                     "--reps", str(args.reps), "--queries", args.queries])
                     else:
                         row = spawn(["--one", library, str(n), "--factor", str(factor),
-                                     "--dist", dist] + (["--periodic"] if args.periodic else []))
+                                     "--dist", dist, "--queries", args.queries]
+                                    + (["--periodic"] if args.periodic else []))
                     if "error" in row:
                         row.update({"library": library, "n": n, "dist": dist})
                     results.append(row)
