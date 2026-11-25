@@ -21,11 +21,11 @@ The *mean separation* of *N* points in a volume *V* is the cube root of
 Both scripts generate their own points in the unit cube, from a fixed seed:
 `uniform`, or `clustered`, a Thomas process with nine tenths of the points in
 clusters of about 1000 (the docstring of `benchmark.py` gives the
-parameters). Query points come from the same distribution. `benchmark.py`
-draws 10,000 new query points for each of three runs, the same draws for every
-library, and reports the median, so no run finds what it visits already in
-cache from the one before; `--queries repeat` runs the same 1000 points three
-times instead. `benchmark_cellsize.py` runs the same 1000 points three times.
+parameters). Query points come from the same distribution. Both scripts
+draw 10,000 new query points for each of three runs, the same draws for every
+library and cell side, and report the median, so no run finds what it visits
+already in cache from the one before; `--queries repeat` runs the same 1000
+points three times instead.
 Each row runs in a process of its own, so
 that the memory figure, the growth of the process's resident size during the
 build, belongs to one structure. Every meshsearch grid is built with the unit
@@ -61,7 +61,7 @@ python benchmarks/benchmark_cellsize.py --sweep --dists clustered
 | `--periodic` | `benchmark.py` | all three axes periodic; `BallTree` is left out |
 | `--large-batch` | `benchmark.py` | one call of 10⁵ and of 10⁶ uniform query points, at each of `--factors` |
 | `--reps R` | `benchmark.py` | repetitions of each large batch (default 3) |
-| `--queries fresh\|repeat` | `benchmark.py` | new query points for every run (default), or the same ones |
+| `--queries fresh\|repeat` | both | new query points for every run (default), or the same ones |
 | `--sweep` | `benchmark_cellsize.py` | every size (10⁶, 10⁷), cell side and input |
 | `--one LIBRARY N`, `--one-sweep N F` | each | a single row, as JSON; what the scripts run in each subprocess |
 

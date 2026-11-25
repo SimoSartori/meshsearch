@@ -73,27 +73,31 @@ the unit cube, *s* = 0.01.
 **On uniform data, start at two mean separations.** The batched sweep on the
 [performance page](benchmark.md#cell-side) measures, for uniform points:
 
-- the nearest object is fastest at one mean separation, and becomes about
-  three times slower at four with fresh query points (four to eight times
-  when the queries' cells are already in cache);
+- the nearest object is fastest at one to two mean separations, and about
+  2.6 times slower at four than at one;
 - the ten nearest are fastest at two;
-- a ball of radius two mean separations is fastest at three, and about five
-  times slower at one;
-- at two mean separations no query kind is more than about 1.7 times slower
-  than at its own best side.
+- a ball of radius two mean separations is fastest at three (level with four
+  at ten million points), and four to four and a half times slower at one;
+- at two mean separations no query kind is more than about 1.8 times slower
+  than at its own best side; the slowest there is that ball, whose radius
+  equals the cell side (see below).
 
 If one kind of query dominates the work, move towards its own best: one mean
-separation for nearest-object queries, which also uses two to three times the
-memory, or three to four for balls of about two mean separations. For a ball
+separation for nearest-object queries on large sets (at ten million points it
+was about 30 per cent faster than two, at a million level with it), which also
+uses two to two and a half times the memory, or three to four for balls of
+about two mean separations. For a ball
 or shell, the work grows with the radius measured in cells, so a radius much
 larger than the cell side calls for a larger cell.
 
-For radius queries, a cell side of 1 to 1.5 times the largest radius *R*max
-was within 5 per cent of the best side on uniform data and on both clustered
-sets measured: the one of the performance page, and one with clusters half as
-wide. This was measured for one radius only, *R*max of two mean separations,
-on a million points, batched, with 10,000 fresh query points per run; it is a
-measured fact, not a rule for other radii.
+For the ball of two mean separations, a cell side of 1.5 times the radius
+was the fastest, or within 2 per cent of it, on both data sets and at both
+sizes. A cell side equal to the radius was 1.1 to 1.8 times slower: a ball
+whose radius is at least the cell side costs more than one just under it, and
+on a million uniform points a cell side 1 per cent larger than the radius cut
+the time from 2.27 to 1.55 µs. So if you set the cell side from the radius,
+make it larger than the radius, not equal to it. This was measured for one
+radius only; it is a measured fact, not a rule for other radii.
 
 **On clustered data the best side is different, and has been measured for one
 kind of clustering only.** The performance page uses a set with nine tenths of
@@ -104,7 +108,7 @@ mean separation of the whole box:
 - the nearest object and the ten nearest are fastest at one mean separation,
   where four fifths of the cells are empty;
 - at four mean separations one cell in a hundred holds 730 or more objects,
-  against an average of 64, and the nearest object is four to five times
+  against an average of 64, and the nearest object is three to four times
   slower than at one;
 - the ball of two mean separations is fastest at three.
 
