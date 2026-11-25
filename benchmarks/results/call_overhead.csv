@@ -1,0 +1,7 @@
+query,per_call_us_median,per_call_us_median_with_scipy_and_sklearn_imported
+nearest; three Python floats,1.06,1.09
+nearest; numpy float64 row unpacked,1.49,1.64
+k10,4.38,4.46
+radius 2 mean separations,8.01,7.96
+contains,0.05,0.05
+is_alive,0.04,0.04

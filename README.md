@@ -1,21 +1,22 @@
 # meshsearch
 Author: Simone Sartori (simone.sartori@inaf.it, simosart23@gmail.com)
 
-meshsearch finds neighbours among points in three dimensions. It divides a box
-around the points into a uniform grid of cubic *cells* and answers *queries*
-by visiting only the cells near the query: the object nearest a point, the *N*
-nearest, every object within a radius or in a spherical shell, and how many
-there are. Each query can be asked about one point or about a whole batch of
-them in one call. The box can be periodic, as in a simulation volume.
+meshsearch is a C++17 library, with Python bindings, for exact neighbour
+searches in three-dimensional point sets. It divides a box around the points
+into a uniform mesh of cubic *cells* and answers each *query* by examining
+only the cells that can hold a result: the nearest object, the *N* nearest,
+every object within a radius or in a spherical shell, and their number. Each
+query can be asked about one point or about a batch of points in one call,
+and any axis of the box may be periodic.
 
-The library is C++17 with no dependency outside the standard library, and the
-Python module is built on the same code. Documentation for both:
+The library depends only on the C++ standard library, and the Python module
+is built on the same code. Documentation for both:
 **<https://simosartori.github.io/meshsearch/>**
 
 <!-- docs:install-start -->
 ## Install
 
-**Python** (3.10 or later; numpy is the one dependency):
+**Python** (3.10 or later; numpy is the only dependency):
 
 ```
 pip install meshsearch
@@ -24,7 +25,7 @@ pip install meshsearch
 Wheels are published for Linux (x86_64 and aarch64) and macOS (arm64 and
 x86_64); elsewhere pip builds the module from source, which needs CMake 3.16
 or later and a C++17 compiler. The module also runs on free-threaded CPython
-(3.14t) without turning the GIL back on.
+(3.14t) without re-enabling the GIL.
 
 **C++**, with CMake 3.16 or later. Build and install the library:
 
@@ -53,15 +54,15 @@ FetchContent_MakeAvailable(meshsearch)
 target_link_libraries(your_target PRIVATE meshsearch::meshsearch)
 ```
 
-The option `MESHSEARCH_INSTALL` (on by default) decides whether meshsearch adds
+The option `MESHSEARCH_INSTALL` (on by default) determines whether meshsearch adds
 its install rules to the build that includes it.
 <!-- docs:install-end -->
 
 <!-- docs:example-start -->
 ## A first grid
 
-In Python, three coordinate arrays, the limits of the box and a cell side make
-a grid. Objects are known by their position in the arrays:
+In Python, a grid is built from three coordinate arrays, the limits of the box
+and a cell side. Objects are identified by their position in the arrays:
 
 ```python
 import numpy as np
