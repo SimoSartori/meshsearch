@@ -404,3 +404,25 @@ size_t meshsearch::MeshGrid::objectCell (const unsigned int index) const
   const size_t slot = m_toInternal[index];
   return get_cell(m_X[slot], m_Y[slot], m_Z[slot]);
 }
+
+
+// ===========================================================================
+
+
+std::vector<std::uint8_t> meshsearch::MeshGrid::isAlive (const std::vector<unsigned int>& indices) const
+{
+  std::vector<std::uint8_t> out;
+  isAlive(indices, out);
+  return out;
+}
+
+
+// ===========================================================================
+
+
+void meshsearch::MeshGrid::isAlive (const std::vector<unsigned int>& indices, std::vector<std::uint8_t>& out) const
+{
+  out.clear();
+  out.reserve(indices.size());
+  for (const unsigned int index : indices) out.push_back(isAlive(index) ? 1 : 0);
+}

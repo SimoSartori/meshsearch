@@ -1066,6 +1066,92 @@ namespace {
   }
 
 
+  // A radius r whose square rounds to exactly d, when one exists within a few
+  // ulps of sqrt(d), so that an object at squared distance d lies exactly on
+  // the bound; otherwise sqrt(d).
+  double radiusOn (const double d)
+  {
+    double r = std::sqrt(d);
+    for (int k=0; k<6; ++k) r = std::nextafter(r, 0.);
+    for (int k=0; k<13; ++k, r=std::nextafter(r, 2.*r+1.))
+      if (r*r == d) return r;
+    return std::sqrt(d);
+  }
+
+
+  // closeObjects and countObjects against brute force where whole cells and
+  // whole shells lie inside the radius: dense cells (about 1 and 8 objects
+  // per cell), radii from 3 cell sides up to +inf, thin shells at Rmin 4 and 8
+  // cell sides, and radii set so that an object lies exactly on Rmax, on Rmin,
+  // or on both. Membership must not change when a cell is taken or left out
+  // whole, and the objects on a bound are the ones a whole-cell decision could
+  // get wrong. countObjects must equal the size of closeObjects, for the point
+  // and the index forms.
+  void testWholeCells ()
+  {
+    const std::vector<std::vector<double>> lims = {{0., 1.}, {0., 1.}, {0., 1.}};
+    std::mt19937 gen(2718u);
+    const size_t n = 4000;
+    Cloud cloud = uniformCloud(n, gen);
+
+    std::uniform_real_distribution<double> unit(0., 1.);
+    std::uniform_int_distribution<unsigned int> pick(0, (unsigned int)n-1);
+    const double inf = std::numeric_limits<double>::infinity();
+    const double separation = std::cbrt(1./double(n));
+
+    for (const double cellsize : {separation, 2.*separation}) {
+      MeshGrid grid(cloud.X, cloud.Y, cloud.Z, cellsize, boxOf(lims));
+
+      // Removals leave holes inside blocks, which an accepted block must skip.
+      Cloud live = cloud;
+      for (int k=0; k<40; ++k) {
+        const unsigned int index = pick(gen);
+        if (!live.alive[index]) continue;
+        grid.removeObject(index);
+        live.alive[index] = 0;
+      }
+
+      auto check = [&] (const double x, const double y, const double z, const double Rmax, const double Rmin,
+                        const long skip) {
+        checkShell(grid, live, x, y, z, Rmax, Rmin, skip);
+        const size_t want = live.shell(x, y, z, Rmax, Rmin, skip).size();
+        const size_t got = (skip < 0) ? grid.countObjects(x, y, z, Rmax, Rmin)
+                                      : grid.countObjects((unsigned int)skip, Rmax, Rmin);
+        assert(got == want);
+      };
+
+      for (int q=0; q<60; ++q) {
+        unsigned int index = pick(gen);
+        while (!live.alive[index]) index = pick(gen);
+        const bool byIndex = (q%2 == 1);
+        const double x = byIndex ? live.X[index] : unit(gen);
+        const double y = byIndex ? live.Y[index] : unit(gen);
+        const double z = byIndex ? live.Z[index] : unit(gen);
+        const long skip = byIndex ? (long)index : -1;
+
+        for (const double ratio : {3., 3.5, 4., 5., 6., 8., 12.}) {
+          check(x, y, z, ratio*cellsize, 0., skip);
+          check(x, y, z, ratio*cellsize, 0.5*ratio*cellsize, skip);
+        }
+        check(x, y, z, inf, 0., skip);
+
+        for (const double inner : {4., 8.})
+          check(x, y, z, (inner+1.)*cellsize, inner*cellsize, skip);
+
+        const double d1 = live.dist_sq(pick(gen), x, y, z);
+        const double d2 = live.dist_sq(pick(gen), x, y, z);
+        const double hi = radiusOn(std::max(d1, d2)), lo = radiusOn(std::min(d1, d2));
+        check(x, y, z, hi, 0., skip);
+        check(x, y, z, hi, lo, skip);
+        check(x, y, z, inf, lo, skip);
+        check(x, y, z, lo, lo, skip);
+      }
+    }
+
+    printf("  whole cells and whole shells inside the radius: ok\n");
+  }
+
+
   // closeObjects' bounds are inclusive at both ends, Rmin <= d <= Rmax, on
   // hand-placed points whose distances are exact in binary so neither boundary
   // comparison is decided by rounding: an object at exactly Rmin is returned,
@@ -1583,6 +1669,7 @@ int main ()
   testCountLimits();
   testLongAxis();
   testWideShells();
+  testWholeCells();
   testShellRadiusSweep();
   testTightestScannedLayer();
   testBruteForce();
