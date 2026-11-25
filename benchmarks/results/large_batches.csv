@@ -1,0 +1,13 @@
+data,points,library,cell_side_mean_separations,queries_per_batch,nearest_cell_order_us,nearest_input_order_us,k10_cell_order_us,k10_input_order_us,radius_cell_order_us,radius_input_order_us
+uniform,1000000,meshsearch,1,100000,0.4384,1.0206,1.8901,3.9527,3.8833,7.5019
+uniform,1000000,meshsearch,1,1000000,0.5253,0.9775,1.892,3.9467,3.766,7.3775
+uniform,1000000,meshsearch,4,100000,2.1495,2.5448,2.9162,3.6024,1.2129,1.5963
+uniform,1000000,meshsearch,4,1000000,2.253,2.5193,3.0016,3.6017,1.3358,1.6932
+uniform,1000000,cKDTree,,100000,1.8115,,4.0277,,7.5987,
+uniform,1000000,cKDTree,,1000000,1.7949,,3.9515,,7.4896,
+uniform,10000000,meshsearch,1,100000,0.8911,1.4162,2.9298,5.6816,5.0747,10.4613
+uniform,10000000,meshsearch,1,1000000,0.5843,1.3959,2.0787,5.4766,4.2423,10.5695
+uniform,10000000,meshsearch,4,100000,2.4533,3.4764,3.3169,5.2717,1.526,2.3089
+uniform,10000000,meshsearch,4,1000000,2.4256,3.1904,3.2199,4.7987,1.4044,2.3349
+uniform,10000000,cKDTree,,100000,2.4599,,5.2606,,9.8323,
+uniform,10000000,cKDTree,,1000000,2.5102,,5.2805,,9.9027,

@@ -1,11 +1,33 @@
 # Performance
 
-What meshsearch's queries, construction and memory cost, measured against
-scipy's `cKDTree` and scikit-learn's `BallTree` from Python, and what the cell
-side changes. The advice drawn from these figures is in the
-[guide](guide.md#choosing-the-cell-side); this page holds the measurements.
+The cost of meshsearch's construction, memory and queries, measured from
+Python against scipy's `cKDTree` and scikit-learn's `BallTree`, and the effect
+of the cell side. The advice drawn from these measurements is in the
+[guide](guide.md#choosing-the-cell-side). Every measured number, at every size,
+is in the [data files](#data-files).
 
-## How it was measured
+## Summary
+
+Ten million points, a cell side of one mean separation *s*, batched queries
+of 10,000 fresh points in random order. Times of queries are in microseconds
+(µs) per query; *periodic* is the uniform set with all three axes periodic,
+against `cKDTree` with `boxsize=1`.
+
+| | uniform: meshsearch | cKDTree | clustered: meshsearch | cKDTree | periodic: meshsearch | cKDTree |
+|---|---|---|---|---|---|---|
+| construction (s) | 2.67 | 6.23 | 2.37 | 5.99 | 1.82 | 6.15 |
+| memory (MiB) | 1,573 | 399 | 1,054 | 335 | 969 | 428 |
+| nearest (µs per query) | 1.14 | 2.89 | 2.04 | 2.94 | 1.54 | 3.50 |
+| k = 10 (µs per query) | 5.24 | 6.12 | 3.45 | 5.32 | 6.16 | 8.12 |
+| radius 2 *s* (µs per query) | 9.51 | 9.82 | 12.66 | 44.70 | 11.85 | 15.93 |
+
+Construction is 2.3 to 3.4 times faster than `cKDTree`'s. The nearest object
+is found 1.4 to 2.5 times faster and the ten nearest 1.2 to 1.5 times faster;
+the radius query is level on uniform data, 1.3 times faster on the periodic
+set and 3.5 times faster on clustered data. The cost is memory: the process
+grows by 2.3 to 3.9 times as much as with `cKDTree`.
+
+## Method
 
 | | |
 |---|---|
@@ -13,270 +35,135 @@ side changes. The advice drawn from these figures is in the
 | compiler | Apple clang 15, CMake Release build (`-O3`) |
 | Python | 3.14.7, numpy 2.5.5, scipy 1.18.1, scikit-learn 1.9.1 |
 
-Every row is one library at one size, run in a process of its own, on one
-thread, with the machine otherwise idle. A query time is the median of three
-runs, in microseconds per query point. Each run draws 10,000 new query points,
-in random order, and every library is given the same draws, so no run finds
-the cells or tree nodes it visits still in the processor's cache from the run
-before. *Per call* is one Python call per query point, so it includes the cost
-of the call itself; *batched* is one call for all 10,000. *Memory* is how much the process's
-resident size grew while the structure was built, which includes memory the
-build used temporarily and the allocator kept. Every structure is built with
-its default parameters; meshsearch with explicit limits, the unit cube.
-Differences under about 10 per cent are within the noise between runs.
+Each row is one library at one size, run in its own process on one thread,
+with the machine otherwise idle. A query time is the median of three runs.
+Each run draws 10,000 new query points in random order, the same draws for
+every library, so that no run finds the cells or tree nodes it visits already
+in the processor's cache. *Batched* is one call for all 10,000 points; *per
+call* is one Python call per point. *Memory* is the growth of the process's
+resident size during construction; it includes temporary memory that the
+allocator retained. Every structure is built with its default parameters,
+meshsearch with the unit cube as explicit limits. Differences below about
+10 per cent are within the variation between runs.
 
-## The data
+## Data
 
-The *mean separation* *s* of *N* points in a volume *V* is the cube root of *V*/*N*: the
-typical distance between neighbours if the points were spread evenly. Cell
-sides and radii below are given in units of *s* for the whole box. The radius
-query uses a radius of 2 *s*, and the k-nearest query k = 10.
+The mean separation *s* of *N* points in a volume *V* is the cube root of *V*/*N*. Cell
+sides and radii are given in units of *s*; the radius query uses 2 *s* and the
+k-nearest query k = 10.
 
-- **Uniform:** points uniform in the unit cube; query points likewise. A
-  ball of radius 2 *s* holds about 33 objects.
+- **Uniform:** points and query points uniform in the unit cube. A ball of
+  radius 2 *s* holds about 33 objects.
 - **Clustered:** a Thomas process in the unit cube. Nine tenths of the points
-  lie in clusters of about 1000, each a Gaussian of width *s* around a centre
-  drawn uniformly; the rest are uniform. Query points are fresh draws from the
-  same clusters, so they fall where the objects are dense: a ball of radius
-  2 *s* holds about 400 objects, twelve times as many as for uniform data.
-
-## Random order and spatial order
-
-The tables describe two realistic ways of asking queries:
-
-- **Fresh query points in random order**, the tables against `cKDTree` and
-  `BallTree` and the periodic ones. Consecutive queries fall far apart, so
-  each reads memory the one before did not.
-- **Query points in spatial order**, the [large-batch](#large-batches) table.
-  meshsearch answers a batch of 10⁵ or more query points in an order that
-  follows the cells, which is the same as being handed them in spatial order;
-  its *input order* columns are the same points in random order.
-
-At one mean separation the spatial order makes queries 1.6 to 2.6 times
-faster; so if you can, query in spatial order, or pass large batches and let
-meshsearch order them.
-
-## In short
-
-- **Construction** is 1.7 to 4.7 times faster than either tree, at every size
-  and on both data sets.
-- **Batched, at a cell side of one mean separation**, meshsearch is ahead of or
-  level with `cKDTree` on every query kind, uniform and clustered. On
-  clustered data its radius query is 3.5 to 6.6 times faster than
-  `cKDTree`'s at ten million points, at either cell side.
-- **Per call**, a meshsearch query for the nearest object costs about 0.5 to
-  1.1 µs more than the same query batched, and a radius query up to about
-  2.4 µs more; a `cKDTree` call for the nearest object costs 8 to 10 µs.
-  meshsearch is ahead per call on the nearest and the ten nearest in every
-  row, and ahead of or level with it on the radius query in every row.
-- **At four mean separations**, batched, the radius query is 4.0 to 6.8 times
-  faster than `cKDTree`'s, but the nearest object is 1.1 to 4.8 times
-  slower.
-- **Periodic boxes** cost up to about 50 per cent over the same grid without
-  periodicity, batched; at one mean separation meshsearch stays ahead of
-  `cKDTree` with its periodic `boxsize` on every query kind.
-- **Large batches**, answered in cell order, make meshsearch 1.8 to 4.3 times
-  faster than `cKDTree` on every query kind at one mean separation.
-- **Memory** is the price. From a million points up, meshsearch's build grows
-  the process by about 1.7 times as much as `cKDTree`'s at four mean
-  separations, and 3 to 5 times at one; `BallTree` uses less than either
-  at ten million.
+  lie in clusters of about 1,000, each a Gaussian of width *s* around a
+  uniformly drawn centre; the rest are uniform. Query points are fresh draws
+  from the same clusters, so a ball of radius 2 *s* holds about 410 objects.
 
 ## Against cKDTree and BallTree
 
-Every figure in these and the periodic tables comes from one run. The trees
-have no cell side, so their columns are the same in the two tables of each
-data set.
-
-### Uniform, cell side 1 *s*
-
-| points | | meshsearch | cKDTree | BallTree |
-|---|---|---|---|---|
-| **100,000** | construction (seconds) | 0.015 | 0.027 | 0.027 |
-|  | memory (MiB) | 23 | 28 | 87 |
-|  | nearest, per call | 1.02 | 8.03 | 31.98 |
-|  | nearest, batched | 0.42 | 0.80 | 3.40 |
-|  | k = 10, per call | 3.01 | 10.89 | 35.53 |
-|  | k = 10, batched | 1.79 | 1.97 | 6.85 |
-|  | radius, per call | 5.16 | 6.07 | 50.64 |
-|  | radius, batched | 3.81 | 4.28 | 3.30 |
-|  | objects within the radius | 31.9 | 31.9 | 31.9 |
-| **1,000,000** | construction (seconds) | 0.190 | 0.367 | 0.369 |
-|  | memory (MiB) | 266 | 52 | 96 |
-|  | nearest, per call | 1.69 | 9.30 | 49.29 |
-|  | nearest, batched | 0.95 | 1.55 | 17.52 |
-|  | k = 10, per call | 5.16 | 13.02 | 60.83 |
-|  | k = 10, batched | 3.35 | 3.57 | 28.90 |
-|  | radius, per call | 8.96 | 9.31 | 750.29 |
-|  | radius, batched | 7.18 | 7.36 | 9.08 |
-|  | objects within the radius | 32.7 | 32.7 | 32.7 |
-| **10,000,000** | construction (seconds) | 2.670 | 6.225 | 6.838 |
-|  | memory (MiB) | 1,573 | 399 | 176 |
-|  | nearest, per call | 2.28 | 9.88 | 97.06 |
-|  | nearest, batched | 1.14 | 2.89 | 63.76 |
-|  | k = 10, per call | 7.11 | 14.22 | 123.80 |
-|  | k = 10, batched | 5.24 | 6.12 | 89.53 |
-|  | radius, per call | 11.89 | 12.69 | 6,881.01 |
-|  | radius, batched | 9.51 | 9.82 | 18.06 |
-|  | objects within the radius | 33.2 | 33.2 | 33.2 |
-
-### Uniform, cell side 4 *s*
-
-| points | | meshsearch | cKDTree | BallTree |
-|---|---|---|---|---|
-| **100,000** | construction (seconds) | 0.012 | 0.027 | 0.027 |
-|  | memory (MiB) | 8 | 28 | 87 |
-|  | nearest, per call | 2.59 | 8.03 | 31.98 |
-|  | nearest, batched | 1.94 | 0.80 | 3.40 |
-|  | k = 10, per call | 3.82 | 10.89 | 35.53 |
-|  | k = 10, batched | 2.67 | 1.97 | 6.85 |
-|  | radius, per call | 2.39 | 6.07 | 50.64 |
-|  | radius, batched | 1.07 | 4.28 | 3.30 |
-|  | objects within the radius | 31.9 | 31.9 | 31.9 |
-| **1,000,000** | construction (seconds) | 0.135 | 0.367 | 0.369 |
-|  | memory (MiB) | 92 | 52 | 96 |
-|  | nearest, per call | 3.22 | 9.30 | 49.29 |
-|  | nearest, batched | 2.62 | 1.55 | 17.52 |
-|  | k = 10, per call | 4.85 | 13.02 | 60.83 |
-|  | k = 10, batched | 3.53 | 3.57 | 28.90 |
-|  | radius, per call | 3.16 | 9.31 | 750.29 |
-|  | radius, batched | 1.70 | 7.36 | 9.08 |
-|  | objects within the radius | 32.7 | 32.7 | 32.7 |
-| **10,000,000** | construction (seconds) | 1.480 | 6.225 | 6.838 |
-|  | memory (MiB) | 683 | 399 | 176 |
-|  | nearest, per call | 3.81 | 9.88 | 97.06 |
-|  | nearest, batched | 3.21 | 2.89 | 63.76 |
-|  | k = 10, per call | 6.38 | 14.22 | 123.80 |
-|  | k = 10, batched | 4.97 | 6.12 | 89.53 |
-|  | radius, per call | 4.08 | 12.69 | 6,881.01 |
-|  | radius, batched | 2.35 | 9.82 | 18.06 |
-|  | objects within the radius | 33.2 | 33.2 | 33.2 |
-
-### Clustered, cell side 1 *s*
-
-| points | | meshsearch | cKDTree | BallTree |
-|---|---|---|---|---|
-| **100,000** | construction (seconds) | 0.015 | 0.027 | 0.026 |
-|  | memory (MiB) | 19 | 23 | 87 |
-|  | nearest, per call | 1.36 | 7.79 | 36.83 |
-|  | nearest, batched | 0.75 | 0.78 | 8.42 |
-|  | k = 10, per call | 2.91 | 10.61 | 43.59 |
-|  | k = 10, batched | 1.71 | 1.92 | 15.06 |
-|  | radius, per call | 6.96 | 19.58 | 63.74 |
-|  | radius, batched | 5.45 | 27.02 | 9.24 |
-|  | objects within the radius | 385.0 | 385.0 | 385.0 |
-| **1,000,000** | construction (seconds) | 0.183 | 0.359 | 0.362 |
-|  | memory (MiB) | 194 | 49 | 95 |
-|  | nearest, per call | 2.01 | 9.01 | 80.33 |
-|  | nearest, batched | 1.25 | 1.77 | 47.00 |
-|  | k = 10, per call | 4.30 | 12.08 | 101.68 |
-|  | k = 10, batched | 3.02 | 3.92 | 66.23 |
-|  | radius, per call | 10.80 | 29.72 | 758.65 |
-|  | radius, batched | 9.03 | 36.80 | 24.57 |
-|  | objects within the radius | 410.2 | 410.2 | 410.2 |
-| **10,000,000** | construction (seconds) | 2.372 | 5.986 | 6.593 |
-|  | memory (MiB) | 1,054 | 335 | 178 |
-|  | nearest, per call | 2.78 | 10.08 | 187.03 |
-|  | nearest, batched | 2.04 | 2.94 | 145.98 |
-|  | k = 10, per call | 5.26 | 13.93 | 237.07 |
-|  | k = 10, batched | 3.45 | 5.32 | 199.38 |
-|  | radius, per call | 14.51 | 37.43 | 6,854.37 |
-|  | radius, batched | 12.66 | 44.70 | 44.10 |
-|  | objects within the radius | 414.6 | 414.6 | 414.6 |
-
-### Clustered, cell side 4 *s*
-
-| points | | meshsearch | cKDTree | BallTree |
-|---|---|---|---|---|
-| **100,000** | construction (seconds) | 0.012 | 0.027 | 0.026 |
-|  | memory (MiB) | 5 | 23 | 87 |
-|  | nearest, per call | 4.40 | 7.79 | 36.83 |
-|  | nearest, batched | 3.76 | 0.78 | 8.42 |
-|  | k = 10, per call | 4.38 | 10.61 | 43.59 |
-|  | k = 10, batched | 3.17 | 1.92 | 15.06 |
-|  | radius, per call | 5.95 | 19.58 | 63.74 |
-|  | radius, batched | 4.37 | 27.02 | 9.24 |
-|  | objects within the radius | 385.0 | 385.0 | 385.0 |
-| **1,000,000** | construction (seconds) | 0.131 | 0.359 | 0.362 |
-|  | memory (MiB) | 85 | 49 | 95 |
-|  | nearest, per call | 5.11 | 9.01 | 80.33 |
-|  | nearest, batched | 4.65 | 1.77 | 47.00 |
-|  | k = 10, per call | 5.34 | 12.08 | 101.68 |
-|  | k = 10, batched | 4.01 | 3.92 | 66.23 |
-|  | radius, per call | 6.92 | 29.72 | 758.65 |
-|  | radius, batched | 5.40 | 36.80 | 24.57 |
-|  | objects within the radius | 410.2 | 410.2 | 410.2 |
-| **10,000,000** | construction (seconds) | 1.393 | 5.986 | 6.593 |
-|  | memory (MiB) | 584 | 335 | 178 |
-|  | nearest, per call | 6.36 | 10.08 | 187.03 |
-|  | nearest, batched | 5.72 | 2.94 | 145.98 |
-|  | k = 10, per call | 6.87 | 13.93 | 237.07 |
-|  | k = 10, batched | 5.99 | 5.32 | 199.38 |
-|  | radius, per call | 8.18 | 37.43 | 6,854.37 |
-|  | radius, batched | 6.73 | 44.70 | 44.10 |
-|  | objects within the radius | 414.6 | 414.6 | 414.6 |
-
-## Periodic boxes
-
-All three axes periodic, against `cKDTree` with `boxsize=1`; `BallTree` has no
-periodic mode. The cell side must fit a whole number of times into the
-period, so at ten million points the grid used 0.004630 for a requested
-0.004642 (1 *s*), and 0.018519 for 0.018566 (4 *s*). The non-periodic tables
-above are the reference for the extra cost.
+Batched queries. The trees have no cell side; meshsearch is shown at 1 *s* and
+4 *s*. Sizes of 10⁵ points are in the data files.
 
 ### Uniform
 
-| points | | meshsearch, 1 *s* | meshsearch, 4 *s* | cKDTree, boxsize |
-|---|---|---|---|---|
-| **1,000,000** | construction (seconds) | 0.169 | 0.134 | 0.414 |
-|  | memory (MiB) | 106 | 77 | 50 |
-|  | nearest, per call | 1.97 | 3.49 | 9.77 |
-|  | nearest, batched | 1.32 | 2.55 | 2.53 |
-|  | k = 10, per call | 6.54 | 5.21 | 14.72 |
-|  | k = 10, batched | 5.03 | 3.78 | 5.85 |
-|  | radius, per call | 11.31 | 3.44 | 12.55 |
-|  | radius, batched | 9.33 | 1.88 | 11.02 |
-|  | objects within the radius | 33.5 | 33.5 | 33.5 |
-| **10,000,000** | construction (seconds) | 1.815 | 1.406 | 6.149 |
-|  | memory (MiB) | 969 | 686 | 428 |
-|  | nearest, per call | 2.21 | 3.97 | 11.51 |
-|  | nearest, batched | 1.54 | 3.31 | 3.50 |
-|  | k = 10, per call | 7.11 | 6.34 | 17.58 |
-|  | k = 10, batched | 6.16 | 4.87 | 8.12 |
-|  | radius, per call | 13.35 | 3.87 | 17.88 |
-|  | radius, batched | 11.85 | 2.61 | 15.93 |
-|  | objects within the radius | 33.5 | 33.5 | 33.5 |
+| points | | meshsearch, 1 *s* | meshsearch, 4 *s* | cKDTree | BallTree |
+|---|---|---|---|---|---|
+| **10⁶** | construction (s) | 0.190 | 0.135 | 0.367 | 0.369 |
+| | memory (MiB) | 266 | 92 | 52 | 96 |
+| | nearest (µs per query) | 0.95 | 2.62 | 1.55 | 17.52 |
+| | k = 10 (µs per query) | 3.35 | 3.53 | 3.57 | 28.90 |
+| | radius (µs per query) | 7.18 | 1.70 | 7.36 | 9.08 |
+| **10⁷** | construction (s) | 2.670 | 1.480 | 6.225 | 6.838 |
+| | memory (MiB) | 1,573 | 683 | 399 | 176 |
+| | nearest (µs per query) | 1.14 | 3.21 | 2.89 | 63.76 |
+| | k = 10 (µs per query) | 5.24 | 4.97 | 6.12 | 89.53 |
+| | radius (µs per query) | 9.51 | 2.35 | 9.82 | 18.06 |
 
 ### Clustered
 
-| points | | meshsearch, 1 *s* | meshsearch, 4 *s* | cKDTree, boxsize |
-|---|---|---|---|---|
-| **1,000,000** | construction (seconds) | 0.154 | 0.135 | 0.367 |
-|  | memory (MiB) | 91 | 77 | 51 |
-|  | nearest, per call | 2.18 | 5.53 | 10.13 |
-|  | nearest, batched | 1.53 | 4.91 | 2.46 |
-|  | k = 10, per call | 4.76 | 5.60 | 14.96 |
-|  | k = 10, batched | 3.46 | 4.22 | 5.58 |
-|  | radius, per call | 13.06 | 7.38 | 39.17 |
-|  | radius, batched | 11.09 | 5.89 | 46.43 |
-|  | objects within the radius | 419.6 | 419.6 | 419.6 |
-| **10,000,000** | construction (seconds) | 1.878 | 1.381 | 6.117 |
-|  | memory (MiB) | 864 | 552 | 363 |
-|  | nearest, per call | 2.68 | 6.66 | 11.06 |
-|  | nearest, batched | 2.37 | 5.91 | 3.42 |
-|  | k = 10, per call | 5.44 | 7.40 | 16.29 |
-|  | k = 10, batched | 4.61 | 6.05 | 7.99 |
-|  | radius, per call | 17.79 | 8.77 | 46.89 |
-|  | radius, batched | 16.23 | 6.80 | 58.37 |
-|  | objects within the radius | 418.7 | 418.7 | 418.7 |
+| points | | meshsearch, 1 *s* | meshsearch, 4 *s* | cKDTree | BallTree |
+|---|---|---|---|---|---|
+| **10⁶** | construction (s) | 0.183 | 0.131 | 0.359 | 0.362 |
+| | memory (MiB) | 194 | 85 | 49 | 95 |
+| | nearest (µs per query) | 1.25 | 4.65 | 1.77 | 47.00 |
+| | k = 10 (µs per query) | 3.02 | 4.01 | 3.92 | 66.23 |
+| | radius (µs per query) | 9.03 | 5.40 | 36.80 | 24.57 |
+| **10⁷** | construction (s) | 2.372 | 1.393 | 5.986 | 6.593 |
+| | memory (MiB) | 1,054 | 584 | 335 | 178 |
+| | nearest (µs per query) | 2.04 | 5.72 | 2.94 | 145.98 |
+| | k = 10 (µs per query) | 3.45 | 5.99 | 5.32 | 199.38 |
+| | radius (µs per query) | 12.66 | 6.73 | 44.70 | 44.10 |
 
-## Per call or batched
+Construction is 1.9 to 4.7 times faster than either tree's. At 1 *s*
+meshsearch is faster than or level with `cKDTree` on every query. At 4 *s*
+its radius query is 4.2 to 6.8 times faster than `cKDTree`'s, while the
+nearest object is 1.1 to 2.6 times slower. `BallTree` is the slowest of the
+three on every query except the clustered radius query, where it is faster
+than `cKDTree`.
 
-A separate measurement of the cost of one Python call, on a million uniform
-points with a cell side of one mean separation: the median of five runs of
-20,000 calls each, in µs per call.
+## Periodic boxes
 
-| query | per call |
+All three axes periodic, against `cKDTree` with `boxsize=1`; `BallTree` has
+no periodic mode. Batched queries. The cell side must divide the period, so
+at 10⁷ points the grid used 0.004630 for a requested 0.004642 (1 *s*) and
+0.018519 for 0.018566 (4 *s*).
+
+| data | points | | meshsearch, 1 *s* | meshsearch, 4 *s* | cKDTree, boxsize |
+|---|---|---|---|---|---|
+| uniform | **10⁶** | construction (s) | 0.169 | 0.134 | 0.414 |
+| | | memory (MiB) | 106 | 77 | 50 |
+| | | nearest (µs per query) | 1.32 | 2.55 | 2.53 |
+| | | k = 10 (µs per query) | 5.03 | 3.78 | 5.85 |
+| | | radius (µs per query) | 9.33 | 1.88 | 11.02 |
+| | **10⁷** | construction (s) | 1.815 | 1.406 | 6.149 |
+| | | memory (MiB) | 969 | 686 | 428 |
+| | | nearest (µs per query) | 1.54 | 3.31 | 3.50 |
+| | | k = 10 (µs per query) | 6.16 | 4.87 | 8.12 |
+| | | radius (µs per query) | 11.85 | 2.61 | 15.93 |
+| clustered | **10⁶** | construction (s) | 0.154 | 0.135 | 0.367 |
+| | | memory (MiB) | 91 | 77 | 51 |
+| | | nearest (µs per query) | 1.53 | 4.91 | 2.46 |
+| | | k = 10 (µs per query) | 3.46 | 4.22 | 5.58 |
+| | | radius (µs per query) | 11.09 | 5.89 | 46.43 |
+| | **10⁷** | construction (s) | 1.878 | 1.381 | 6.117 |
+| | | memory (MiB) | 864 | 552 | 363 |
+| | | nearest (µs per query) | 2.37 | 5.91 | 3.42 |
+| | | k = 10 (µs per query) | 4.61 | 6.05 | 7.99 |
+| | | radius (µs per query) | 16.23 | 6.80 | 58.37 |
+
+Against the same grid without periodic axes, batched queries took between
+3 per cent less and 50 per cent more time. At 1 *s* meshsearch remains faster
+than `cKDTree` on every query.
+
+## Per call
+
+One Python call per query point, in µs per query, with the same fresh query
+points as the batched tables.
+
+| data | points | query | meshsearch, 1 *s* | meshsearch, 4 *s* | cKDTree | BallTree |
+|---|---|---|---|---|---|---|
+| uniform | 10⁶ | nearest | 1.69 | 3.22 | 9.30 | 49.29 |
+| | | k = 10 | 5.16 | 4.85 | 13.02 | 60.83 |
+| | | radius | 8.96 | 3.16 | 9.31 | 750.29 |
+| | 10⁷ | nearest | 2.28 | 3.81 | 9.88 | 97.06 |
+| | | k = 10 | 7.11 | 6.38 | 14.22 | 123.80 |
+| | | radius | 11.89 | 4.08 | 12.69 | 6,881.01 |
+| clustered | 10⁶ | nearest | 2.01 | 5.11 | 9.01 | 80.33 |
+| | | k = 10 | 4.30 | 5.34 | 12.08 | 101.68 |
+| | | radius | 10.80 | 6.92 | 29.72 | 758.65 |
+| | 10⁷ | nearest | 2.78 | 6.36 | 10.08 | 187.03 |
+| | | k = 10 | 5.26 | 6.87 | 13.93 | 237.07 |
+| | | radius | 14.51 | 8.18 | 37.43 | 6,854.37 |
+
+A meshsearch call costs 0.5 to 1.1 µs more than the same query in a batch for
+the nearest object, and up to 2.4 µs more for the radius query; a `cKDTree`
+call for the nearest object costs 9 to 10 µs. meshsearch is faster per call on
+every query in every row; the periodic rows are in the data files.
+
+The cost of the call itself, measured separately on 10⁶ uniform points at
+1 *s* by repeating a few query points (median of five runs of 20,000 calls):
+
+| query | µs per call |
 |---|---|
 | nearest, three Python floats | 1.06 |
 | nearest, a numpy float64 row unpacked | 1.49 |
@@ -285,155 +172,150 @@ points with a cell side of one mean separation: the median of five runs of
 | `contains` | 0.05 |
 | `is_alive` | 0.04 |
 
-With scipy and scikit-learn also imported into the process, the figures are
-the same within 10 per cent. The calls repeat a few query points, so they
-measure the call itself; with fresh query points in random order a call for
-the nearest object took 1.69 µs on the same grid, and 0.95 µs per query
-batched (first table above).
+With scipy and scikit-learn imported into the same process, the figures change
+by less than 10 per cent.
 
 ## Large batches
 
-A batch of 10⁵ query points or more is answered internally in an order that
-follows the cells, and the results are then returned in input order. On a
-uniform grid, one call of 10⁵ or 10⁶ query points, new ones in random order
-for each of the three runs; the *input order* columns are the same queries
-asked in batches small enough (50,000) to be answered in the order given, so
-they show what random order costs. µs per query.
+A batch of 10⁵ query points or more is answered internally in the order of
+the cells, and the results are returned in input order. One call of 10⁵ or
+10⁶ fresh uniform query points in random order; the *input order* columns are
+the same points asked in batches of 50,000, which are answered in the order
+given. In µs per query.
 
 | grid | queries | query | meshsearch, 1 *s* | input order, 1 *s* | meshsearch, 4 *s* | input order, 4 *s* | cKDTree |
 |---|---|---|---|---|---|---|---|
-| 1,000,000 | 100,000 | nearest | 0.44 | 1.02 | 2.15 | 2.54 | 1.81 |
-| 1,000,000 | 100,000 | k = 10 | 1.89 | 3.95 | 2.92 | 3.60 | 4.03 |
-| 1,000,000 | 100,000 | radius | 3.88 | 7.50 | 1.21 | 1.60 | 7.60 |
-| 1,000,000 | 1,000,000 | nearest | 0.53 | 0.98 | 2.25 | 2.52 | 1.79 |
-| 1,000,000 | 1,000,000 | k = 10 | 1.89 | 3.95 | 3.00 | 3.60 | 3.95 |
-| 1,000,000 | 1,000,000 | radius | 3.77 | 7.38 | 1.34 | 1.69 | 7.49 |
-| 10,000,000 | 100,000 | nearest | 0.89 | 1.42 | 2.45 | 3.48 | 2.46 |
-| 10,000,000 | 100,000 | k = 10 | 2.93 | 5.68 | 3.32 | 5.27 | 5.26 |
-| 10,000,000 | 100,000 | radius | 5.07 | 10.46 | 1.53 | 2.31 | 9.83 |
-| 10,000,000 | 1,000,000 | nearest | 0.58 | 1.40 | 2.43 | 3.19 | 2.51 |
-| 10,000,000 | 1,000,000 | k = 10 | 2.08 | 5.48 | 3.22 | 4.80 | 5.28 |
-| 10,000,000 | 1,000,000 | radius | 4.24 | 10.57 | 1.40 | 2.33 | 9.90 |
+| 10⁶ | 10⁵ | nearest | 0.44 | 1.02 | 2.15 | 2.54 | 1.81 |
+| 10⁶ | 10⁵ | k = 10 | 1.89 | 3.95 | 2.92 | 3.60 | 4.03 |
+| 10⁶ | 10⁵ | radius | 3.88 | 7.50 | 1.21 | 1.60 | 7.60 |
+| 10⁶ | 10⁶ | nearest | 0.53 | 0.98 | 2.25 | 2.52 | 1.79 |
+| 10⁶ | 10⁶ | k = 10 | 1.89 | 3.95 | 3.00 | 3.60 | 3.95 |
+| 10⁶ | 10⁶ | radius | 3.77 | 7.38 | 1.34 | 1.69 | 7.49 |
+| 10⁷ | 10⁵ | nearest | 0.89 | 1.42 | 2.45 | 3.48 | 2.46 |
+| 10⁷ | 10⁵ | k = 10 | 2.93 | 5.68 | 3.32 | 5.27 | 5.26 |
+| 10⁷ | 10⁵ | radius | 5.07 | 10.46 | 1.53 | 2.31 | 9.83 |
+| 10⁷ | 10⁶ | nearest | 0.58 | 1.40 | 2.43 | 3.19 | 2.51 |
+| 10⁷ | 10⁶ | k = 10 | 2.08 | 5.48 | 3.22 | 4.80 | 5.28 |
+| 10⁷ | 10⁶ | radius | 4.24 | 10.57 | 1.40 | 2.33 | 9.90 |
 
-The cell order is worth 1.6 to 2.6 times at one mean separation and 1.1 to 1.7
-at four, about the same at 10⁵ as at 10⁶ queries. On a large batch at one mean
-separation meshsearch is 1.8 to 4.3 times faster than `cKDTree` on every query
-kind, and 5.6 to 7.1 times on the radius query at four.
+The cell order makes queries 1.6 to 2.6 times faster at 1 *s* and 1.1 to 1.7
+times faster at 4 *s*. A program that can present its query points in spatial
+order obtains the same gain with batches of any size. On large batches at
+1 *s* meshsearch is 1.8 to 4.3 times faster than `cKDTree` on every query.
 
 ## Cell side
 
-Batched query times at six cell sides, with how the objects fill the cells:
-the share of cells left empty, the mean count in the cells that are not, and
-the 99th percentile of the count over all cells. The radius stays 2 *s*, so
-every row answers the same question. The queries are drawn as for the other
-tables, 10,000 fresh points per run; the whole sweep takes under a minute, so
-it was run five times and each figure is the median of the five.
+Batched query times at ten million points and six cell sides, with the
+occupancy of the cells: the fraction of empty cells, the mean count in the
+non-empty ones and the 99th percentile of the count over all cells. The radius
+stays 2 *s*. Query points are drawn as for the other tables; the sweep was run
+five times and each time is the median of the five. The sweep at 10⁶ points
+is in the data files.
 
-### Uniform, a million points
+### Uniform
 
-| cell side | cells | objects per cell | empty cells | per non-empty cell | 99th percentile | construction (seconds) | memory (MiB) | nearest | k = 10 | radius |
-|---|---|---|---|---|---|---|---|---|---|---|
-| 1 *s* | 1,000,000 | 1.0 | 36.8 % | 1.6 | 4 | 0.198 | 218 | 0.95 | 3.67 | 6.68 |
-| 1.5 *s* | 300,763 | 3.3 | 3.7 % | 3.5 | 8 | 0.160 | 132 | 0.80 | 2.01 | 2.72 |
-| 2 *s* | 125,000 | 8.0 | 0.0 % | 8.0 | 15 | 0.146 | 109 | 1.02 | 2.17 | 2.27 |
-| 2.5 *s* | 64,000 | 15.6 | 0.0 % | 15.6 | 25 | 0.145 | 100 | 1.16 | 2.49 | 1.57 |
-| 3 *s* | 39,304 | 25.4 | 0.0 % | 25.4 | 39 | 0.140 | 97 | 1.46 | 2.85 | 1.55 |
-| 4 *s* | 15,625 | 64.0 | 0.0 % | 64.0 | 83 | 0.136 | 92 | 2.61 | 3.56 | 1.63 |
+| cell side | cells | empty | mean in non-empty | 99th percentile | construction (s) | memory (MiB) | nearest (µs per query) | k = 10 (µs per query) | radius (µs per query) |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 *s* | 10,077,696 | 37 % | 1.6 | 4 | 2.24 | 2,210 | 1.21 | 4.91 | 9.20 |
+| 1.5 *s* | 2,985,984 | 3.5 % | 3.5 | 8 | 1.82 | 1,133 | 1.32 | 3.17 | 4.43 |
+| 2 *s* | 1,259,712 | 0 % | 7.9 | 15 | 1.66 | 849 | 1.52 | 3.34 | 3.95 |
+| 2.5 *s* | 658,503 | 0 % | 15.2 | 25 | 1.59 | 769 | 1.77 | 3.62 | 2.59 |
+| 3 *s* | 373,248 | 0 % | 26.8 | 40 | 1.55 | 733 | 2.06 | 3.95 | 2.39 |
+| 4 *s* | 157,464 | 0 % | 63.5 | 83 | 1.46 | 696 | 3.15 | 4.66 | 2.27 |
 
-### Uniform, ten million points
+### Clustered
 
-| cell side | cells | objects per cell | empty cells | per non-empty cell | 99th percentile | construction (seconds) | memory (MiB) | nearest | k = 10 | radius |
-|---|---|---|---|---|---|---|---|---|---|---|
-| 1 *s* | 10,077,696 | 1.0 | 37.1 % | 1.6 | 4 | 2.242 | 2,210 | 1.21 | 4.91 | 9.20 |
-| 1.5 *s* | 2,985,984 | 3.3 | 3.5 % | 3.5 | 8 | 1.819 | 1,133 | 1.32 | 3.17 | 4.43 |
-| 2 *s* | 1,259,712 | 7.9 | 0.0 % | 7.9 | 15 | 1.665 | 849 | 1.52 | 3.34 | 3.95 |
-| 2.5 *s* | 658,503 | 15.2 | 0.0 % | 15.2 | 25 | 1.590 | 769 | 1.77 | 3.62 | 2.59 |
-| 3 *s* | 373,248 | 26.8 | 0.0 % | 26.8 | 40 | 1.547 | 733 | 2.06 | 3.95 | 2.39 |
-| 4 *s* | 157,464 | 63.5 | 0.0 % | 63.5 | 83 | 1.463 | 696 | 3.15 | 4.66 | 2.27 |
+| cell side | cells | empty | mean in non-empty | 99th percentile | construction (s) | memory (MiB) | nearest (µs per query) | k = 10 (µs per query) | radius (µs per query) |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 *s* | 10,077,696 | 80 % | 5.0 | 24 | 2.17 | 2,068 | 1.68 | 3.50 | 10.86 |
+| 1.5 *s* | 2,985,984 | 59 % | 8.2 | 76 | 1.72 | 1,035 | 2.26 | 3.87 | 7.86 |
+| 2 *s* | 1,259,712 | 35 % | 12.2 | 165 | 1.58 | 736 | 2.85 | 4.24 | 7.67 |
+| 2.5 *s* | 658,503 | 16 % | 18.1 | 284 | 1.51 | 651 | 3.39 | 4.38 | 5.94 |
+| 3 *s* | 373,248 | 4.4 % | 28.0 | 434 | 1.45 | 605 | 3.97 | 4.58 | 5.92 |
+| 4 *s* | 157,464 | 0.1 % | 63.6 | 730 | 1.40 | 580 | 5.39 | 5.22 | 6.18 |
 
-### Clustered, a million points
+On uniform data the nearest object is fastest at 1 *s*, with 1.5 *s* 9 per
+cent slower, and 2.6 times slower at 4 *s*. The ten nearest are fastest at
+1.5 *s*, with 2 *s* 5 per cent slower. The radius query is fastest at 4 *s*,
+with 3 *s* 5 per cent and 2.5 *s* 14 per cent slower, and four times slower
+at 1 *s*. At 10⁶ points the optima are the same within one step of the sweep.
 
-| cell side | cells | objects per cell | empty cells | per non-empty cell | 99th percentile | construction (seconds) | memory (MiB) | nearest | k = 10 | radius |
-|---|---|---|---|---|---|---|---|---|---|---|
-| 1 *s* | 1,000,000 | 1.0 | 80.1 % | 5.0 | 24 | 0.185 | 215 | 1.18 | 2.63 | 8.43 |
-| 1.5 *s* | 300,763 | 3.3 | 59.5 % | 8.2 | 75 | 0.147 | 120 | 1.69 | 2.85 | 5.78 |
-| 2 *s* | 125,000 | 8.0 | 34.7 % | 12.3 | 167 | 0.140 | 92 | 2.20 | 3.04 | 5.65 |
-| 2.5 *s* | 64,000 | 15.6 | 14.9 % | 18.4 | 288 | 0.137 | 85 | 2.79 | 3.16 | 4.83 |
-| 3 *s* | 39,304 | 25.4 | 5.7 % | 27.0 | 414 | 0.137 | 89 | 3.33 | 3.44 | 5.09 |
-| 4 *s* | 15,625 | 64.0 | 0.1 % | 64.0 | 749 | 0.134 | 97 | 4.80 | 4.09 | 5.47 |
+On clustered data the nearest and the ten nearest are fastest at 1 *s*, where
+four fifths of the cells are empty. They slow down as the cells grow: at 4 *s*
+one cell in a hundred holds 730 objects or more, eleven times the mean, and
+the nearest object is 3.2 times slower than at 1 *s*. The radius query is
+fastest at 2.5 to 3 *s*.
 
-### Clustered, ten million points
+**The step at a cell side equal to the radius.** At 2 *s* the cell side
+equals the radius, and a ball whose radius is at least the cell side costs
+more than one just below it. A separate measurement on 10⁶ uniform points
+(median of five runs of 10,000 fresh queries, batched):
 
-| cell side | cells | objects per cell | empty cells | per non-empty cell | 99th percentile | construction (seconds) | memory (MiB) | nearest | k = 10 | radius |
-|---|---|---|---|---|---|---|---|---|---|---|
-| 1 *s* | 10,077,696 | 1.0 | 80.2 % | 5.0 | 24 | 2.168 | 2,068 | 1.68 | 3.50 | 10.86 |
-| 1.5 *s* | 2,985,984 | 3.3 | 59.3 % | 8.2 | 76 | 1.718 | 1,035 | 2.26 | 3.87 | 7.86 |
-| 2 *s* | 1,259,712 | 7.9 | 34.9 % | 12.2 | 165 | 1.581 | 736 | 2.85 | 4.24 | 7.67 |
-| 2.5 *s* | 658,503 | 15.2 | 15.9 % | 18.1 | 284 | 1.507 | 651 | 3.39 | 4.38 | 5.94 |
-| 3 *s* | 373,248 | 26.8 | 4.4 % | 28.0 | 434 | 1.451 | 605 | 3.97 | 4.58 | 5.92 |
-| 4 *s* | 157,464 | 63.5 | 0.1 % | 63.6 | 730 | 1.399 | 580 | 5.39 | 5.22 | 6.18 |
+| cell side | 1.98 *s* | 1.999 *s* | 2.000 *s* | 2.001 *s* | 2.02 *s* | 2.98 *s* | 3.00 *s* | 3.02 *s* |
+|---|---|---|---|---|---|---|---|---|
+| radius / cell side | 1.010 | 1.0005 | 1.000 | 0.9995 | 0.990 | 0.671 | 0.667 | 0.662 |
+| radius (µs per query) | 2.28 | 2.34 | 2.27 | 1.80 | 1.55 | 1.44 | 1.50 | 1.55 |
 
-On uniform data the nearest object is fastest at one to one and a half mean
-separations (one and a half ahead by about 15 per cent at a million points,
-one ahead by about 9 per cent at ten million), and 2.6 to 2.7 times slower at
-four than at one. The ten nearest are fastest at one and a half, with two
-within 8 per cent. The radius query is fastest at two and a half to four: at
-a million points the three lie within 5 per cent of each other; at ten
-million four is fastest, three 5 per cent and two and a half 14 per cent
-slower. It is about four times slower at one. On the clustered set the
-nearest and the ten nearest are fastest at one, where four fifths of the
-cells are empty, and slow down as the cells grow: at four, one cell in a
-hundred holds over ten times the average, and the nearest object is three to
-four times slower than at one. The radius query is fastest at two and a half
-to three (level at ten million points, two and a half ahead by 5 per cent at
-a million).
-
-At two mean separations the cell side equals the radius, and that is a step:
-a ball whose radius is at least the cell side costs more than one just under
-it. On a million uniform points, in a separate measurement (median of five
-runs of 10,000 fresh queries), the radius query took 2.27 µs at a cell side
-of exactly 2 *s* and 1.55 µs at 2.02 *s*; at 3 *s* it took 1.50. The half
-steps in the tables show the same step: with larger cells, the radius query
-at 2.5 *s* is 1.2 to 1.5 times faster than at 2 *s*.
+In the sweep the step appears as the gain from 2 *s* to 2.5 *s*: the radius
+query is 1.5 times faster on uniform and 1.3 times faster on clustered data.
 
 ## Memory
 
-What a grid allocates is fixed by the number of objects and of cells. It
-keeps 37 bytes per object (the coordinates, 24, and the bookkeeping that maps
-indices to storage, 13) and, on a grid with no periodic axis, at least 112
-bytes per cell (16 for the cell, and 96 for its eight entries in a table of
-cell offsets); a grid periodic along all three axes needs about 28 bytes per
-cell. At ten million points and one mean separation, with 10,077,696 cells,
-that is 353 MiB for the objects and at least 1,076 MiB for the cells, about
-1.4 GiB. At four mean separations the 157,464 cells take about 17 MiB beside
-the same 353 MiB.
+What a grid allocates is determined by the number of objects and of cells:
+37 bytes per object (24 for the coordinates, 13 for the bookkeeping that maps
+indices to storage) and, with no periodic axis, at least 112 bytes per cell
+(16 for the cell and 96 for its eight entries in a table of cell offsets); a
+grid periodic along all three axes needs about 28 bytes per cell. At 10⁷
+points and 1 *s*, with 10,077,696 cells, this is 353 MiB for the objects and
+at least 1,076 MiB for the cells, about 1.4 GiB. At 4 *s* the 157,464 cells
+take about 17 MiB in addition to the same 353 MiB.
 
-The build needs more while it runs: a temporary cell index of 8 bytes per
-object, 76 MiB at ten million, and from Python a copy of the three coordinate
-arrays, 24 bytes per object, 229 MiB. Both are freed when the grid is built,
-but the allocator may keep them in the process, which is why the tables report
-about 700 MiB for the ten-million-point grid at four mean separations; a C++
-program building the same grid grew by 455 MiB. The grid is built compact,
-with no room reserved for later additions.
+Construction needs more while it runs: a temporary cell index of 8 bytes per
+object (76 MiB at 10⁷) and, from Python, a copy of the three coordinate
+arrays, 24 bytes per object (229 MiB). Both are freed when the grid is built,
+but the allocator may retain them in the process. This is why the tables
+report about 700 MiB for the grid of 10⁷ points at 4 *s*; a C++ program
+building the same grid grew by 455 MiB. The grid is built compact, with no
+capacity reserved for later additions.
 
-The tables report how much the process's resident size grew, which is not the
-same as what was allocated, and it varies between runs. At four mean
-separations it repeated within 2 per cent. At one mean separation and ten
-million points, identical runs grew by 1.0 to 2.3 GiB, on either data set:
-in some runs less than the 1.4 GiB the grid allocates, in others well above
-it.
+The growth of the resident size is not the allocation, and it varies between
+runs. At 10⁷ points and 4 *s* it varied by less than 3 per cent. At 1 *s*,
+identical runs grew by 1.0 to 2.2 GiB: in some runs less
+than the 1.4 GiB the grid allocates, in others considerably more. The cause of
+the growth below the allocation has not been determined.
 
 ## Not measured
 
-Threads; additions and removals; boxes much longer along one axis than the
-others; clustering of other strengths or shapes; radii other than two mean
-separations; the batched `count_objects` and `contains` against the trees; and machines other
-than the one above.
+Threads; additions and removals; boxes elongated along one axis; clustering of
+other strengths or shapes; radii other than 2 *s*; the batched `count_objects`
+and `contains` against the trees; machines other than the one above.
 
-## Reproducing
+## Data files
 
-The scripts are in `benchmarks/`; see `benchmarks/README.md` for what each
-measures and its options. From a source checkout:
+Every number measured for this page, at every size, in
+[`benchmarks/results/`](https://github.com/SimoSartori/meshsearch/tree/main/benchmarks/results).
+Times are in µs per query, construction in seconds, memory in MiB.
+
+- [`comparison.csv`](https://github.com/SimoSartori/meshsearch/blob/main/benchmarks/results/comparison.csv):
+  meshsearch at 1 *s* and 4 *s*, `cKDTree` and `BallTree`, uniform and
+  clustered, 10⁵, 10⁶ and 10⁷ points, per call and batched.
+- [`periodic.csv`](https://github.com/SimoSartori/meshsearch/blob/main/benchmarks/results/periodic.csv):
+  the periodic boxes, per call and batched.
+- [`large_batches.csv`](https://github.com/SimoSartori/meshsearch/blob/main/benchmarks/results/large_batches.csv):
+  the large batches, in cell order and in input order.
+- [`cellside.csv`](https://github.com/SimoSartori/meshsearch/blob/main/benchmarks/results/cellside.csv)
+  and [`cellside_runs.csv`](https://github.com/SimoSartori/meshsearch/blob/main/benchmarks/results/cellside_runs.csv):
+  the cell-side sweep at 10⁶ and 10⁷ points, medians and each of the five
+  runs, batched and per call.
+- [`radius_step.csv`](https://github.com/SimoSartori/meshsearch/blob/main/benchmarks/results/radius_step.csv):
+  the radius query around a cell side equal to the radius.
+- [`call_overhead.csv`](https://github.com/SimoSartori/meshsearch/blob/main/benchmarks/results/call_overhead.csv):
+  the cost of one Python call.
+- [`memory_cpp.csv`](https://github.com/SimoSartori/meshsearch/blob/main/benchmarks/results/memory_cpp.csv):
+  the construction measured from C++.
+
+The scripts are in `benchmarks/`; `benchmarks/README.md` describes each and
+its options. From a source checkout:
 
 ```
 pip install -C cmake.build-type=Release .
@@ -444,6 +326,6 @@ python benchmarks/benchmark.py --large-batch --sizes 1000000 10000000
 python benchmarks/benchmark_cellsize.py --sweep
 ```
 
-Each prints its rows as JSON, from which the tables above were made.
-The first three took 17 minutes together on the machine above, most of it in
-`BallTree`'s per-call radius queries at ten million points.
+Each prints its rows as JSON. The first three took 17 minutes together on the
+machine above, most of it in `BallTree`'s per-call radius queries at 10⁷
+points.
