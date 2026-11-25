@@ -634,7 +634,8 @@ NB_MODULE(meshsearch, m)
 
     .def_prop_ro("cellsize", &meshsearch::MeshGrid::get_cellsize,
                  "Cell side. The cellsize requested, unless an axis is periodic,\n"
-                 "where it can be slightly smaller.")
+                 "where it is the largest side not above the request that fits a\n"
+                 "whole number of times into the shortest period.")
 
     .def_prop_ro("periodic",
                  [](const meshsearch::MeshGrid& self) {

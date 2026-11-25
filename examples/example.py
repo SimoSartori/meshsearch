@@ -1,6 +1,5 @@
 """A short tour of meshsearch from Python: build a grid over a set of points,
-ask the three kinds of neighbour question, modify the grid, and handle a bad
-query.
+ask the four neighbour queries, modify the grid, and handle a bad query.
 
     pip install meshsearch
     python examples/example.py
@@ -22,9 +21,9 @@ x, y, z = rng.random(n), rng.random(n), rng.random(n)
 limits = [[0.0, 1.0], [0.0, 1.0], [0.0, 1.0]]
 
 # The cell side, the one tuning parameter. The mean separation of n points in
-# a volume V is (V / n) ** (1/3); two mean separations is a starting value for
-# uniform data, and the guide shows what other choices cost. Coordinates, cell
-# side and radii share one unit, whatever it is.
+# a volume V is (V / n) ** (1/3). On uniform data the guide advises starting
+# between 1.5 and 2.5 mean separations, here two, and shows what other choices
+# cost. Coordinates, cell side and radii share one unit, whatever it is.
 volume = 1.0
 separation = (volume / n) ** (1 / 3)
 cellsize = 2 * separation

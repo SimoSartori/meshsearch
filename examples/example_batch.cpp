@@ -42,9 +42,9 @@ int main ()
 
   // A batch takes the query points as three vectors, and has the name of the
   // single query: vectors in place of numbers select it. Results come back in
-  // query order. A large batch is answered internally in an order that
-  // follows the cells, which is faster than the same queries asked one by one
-  // in a loop.
+  // query order. A batch is faster than the same queries asked one by one in
+  // a loop, and one of 10^5 query points or more is answered internally in an
+  // order that follows the cells, which is faster again.
   const std::vector<unsigned int> nearest = grid.nearestObject(QX, QY, QZ);
   printf("nearest object to query 0: %u\n", nearest[0]);
 
@@ -104,11 +104,12 @@ int main ()
   printf("neighbours of objects 0, 1, 2: %llu %llu %llu\n",
          (unsigned long long)around[0], (unsigned long long)around[1], (unsigned long long)around[2]);
 
-  // contains and isAlive answer for many points or indices at once without
-  // raising: one std::uint8_t, 0 or 1, per entry. contains is whether a query
-  // at the point would be accepted, that is, whether it lies in the box, so a
-  // batch can be screened before it is asked. isAlive is the one member taking
-  // an index that does not raise: an index out of range or removed is 0.
+  // contains and isAlive answer for many points or indices at once, and never
+  // raise on the values: one std::uint8_t, 0 or 1, per entry. contains is
+  // whether a query at the point would be accepted, that is, whether it lies
+  // in the box, so a batch can be screened before it is asked. isAlive is the
+  // one member taking an index that does not raise: an index out of range or
+  // removed is 0.
   std::vector<double> screened = QX;
   screened[99] = 5.;
   const std::vector<std::uint8_t> accepted = grid.contains(screened, QY, QZ);

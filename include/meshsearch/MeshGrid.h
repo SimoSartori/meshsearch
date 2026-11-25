@@ -40,8 +40,8 @@ namespace meshsearch {
    *  members may not.
    *
    *  Coordinates, cellsize and radii must all be in the same unit; none is
-   *  imposed. Every member taking a point raises Error if the point lies
-   *  outside the box (see contains).
+   *  imposed. Every member taking a point, except contains, raises Error if
+   *  the point lies outside the box.
    *
    *  Distances are Euclidean, with the minimum image on periodic axes: along
    *  a periodic axis of period L the displacement is taken in [-L/2, L/2),
@@ -61,11 +61,11 @@ namespace meshsearch {
    *
    *  The same input (coordinates in the same order, cellsize, options, the
    *  same sequence of addObject and removeObject, the same queries) gives
-   *  the same results in the same order, on every platform and with any
-   *  number of threads; a copy answers as the original does. Which order
-   *  the objects take within a cell, and so the order of the results of
-   *  closeObjects and get_objectsInCell, is not part of the interface and
-   *  may change between versions.
+   *  the same results in the same order, on Linux and macOS, on x86-64
+   *  and ARM, and with any number of threads; a copy answers as the
+   *  original does. Which order the objects take within a cell, and so the
+   *  order of the results of closeObjects and get_objectsInCell, is not
+   *  part of the interface and may change between versions.
    */
   class MeshGrid final {
 
