@@ -107,11 +107,14 @@ namespace {
     return nb::ndarray<nb::numpy, bool, nb::ndim<1>>(reinterpret_cast<bool*>(held->data()), 1, shape.data(), owner);
   }
 
-  // A call whose first argument has a length is a batch; anything else is
-  // left to the overload taking a single point or index. This is what keeps
-  // a scalar and an array-like apart without asking for an exact type.
-  bool isBatch (const nb::handle& a)
+  // An argument whose type has a length is a batch; anything else is a
+  // single point or index. The type's slots are read, not called, so a
+  // scalar is told apart without raising; only an object whose type has a
+  // length it then refuses, a 0-d numpy array, goes through len().
+  bool isBatch (const nb::handle& a) noexcept
   {
+    PyTypeObject* type = Py_TYPE(a.ptr());
+    if (PyType_GetSlot(type, Py_sq_length) == nullptr && PyType_GetSlot(type, Py_mp_length) == nullptr) return false;
     if (PyObject_Length(a.ptr()) >= 0) return true;
     PyErr_Clear();
     return false;
@@ -352,6 +355,43 @@ namespace {
     }
   }
 
+  // The first argument of a batch form, and the index of a single-object
+  // form. Overload resolution matches them on isBatch, so a call reaches the
+  // form it is meant for without any overload raising to pass it on.
+  struct BatchArg {
+    nb::object value;
+    operator nb::handle () const { return value; }
+  };
+
+  struct ScalarArg {
+    nb::object value;
+    operator nb::handle () const { return value; }
+  };
+
+}
+
+namespace nanobind::detail {
+
+  template <class Arg, bool batch>
+  struct ShapeCaster {
+    NB_TYPE_CASTER(Arg, const_name("object"))
+
+    bool from_python (handle src, uint8_t, cleanup_list*) noexcept
+    {
+      if (isBatch(src) != batch) return false;
+      value.value = borrow(src);
+      return true;
+    }
+
+    static handle from_cpp (const Arg& arg, rv_policy, cleanup_list*) noexcept
+    {
+      return arg.value.inc_ref();
+    }
+  };
+
+  template <> struct type_caster<BatchArg> : ShapeCaster<BatchArg, true> {};
+  template <> struct type_caster<ScalarArg> : ShapeCaster<ScalarArg, false> {};
+
 }
 
 
@@ -477,8 +517,16 @@ NB_MODULE(meshsearch, m)
          "Number of objects in the grid, excluding removed ones.")
 
     .def("is_alive",
-         [](const meshsearch::MeshGrid& self, const nb::object& indices, const nb::object& out) -> nb::object {
-           if (!isBatch(indices)) throw nb::next_overload();
+         [](const meshsearch::MeshGrid& self, const ScalarArg& index) {
+           return self.isAlive(scalarIndex(index, true));
+         },
+         "index"_a,
+         "True if index names an object still in the grid. A negative index,\n"
+         "or one out of range or removed, is False: the one member taking an\n"
+         "index that does not raise IndexError.")
+
+    .def("is_alive",
+         [](const meshsearch::MeshGrid& self, const BatchArg& indices, const nb::object& out) -> nb::object {
            const auto objects = readIndices(indices, true);
            OutArray target;
            std::uint8_t* dest = nullptr;
@@ -506,19 +554,17 @@ NB_MODULE(meshsearch, m)
          "or something that is not an array raises TypeError; a wrong shape\n"
          "or a non-contiguous array raises meshsearch.Error.")
 
-    .def("is_alive",
-         [](const meshsearch::MeshGrid& self, const nb::object& index) {
-           return self.isAlive(scalarIndex(index, true));
+    .def("contains",
+         [](const meshsearch::MeshGrid& self, const double x, const double y, const double z) {
+           return self.contains(x, y, z);
          },
-         "index"_a,
-         "True if index names an object still in the grid. A negative index,\n"
-         "or one out of range or removed, is False: the one member taking an\n"
-         "index that does not raise IndexError.")
+         "x"_a, "y"_a, "z"_a,
+         "True if a query at the point is accepted, that is, if the point lies\n"
+         "in the box. False for a NaN coordinate. Never raises.")
 
     .def("contains",
-         [](const meshsearch::MeshGrid& self, const nb::object& x, const nb::object& y, const nb::object& z,
+         [](const meshsearch::MeshGrid& self, const BatchArg& x, const nb::object& y, const nb::object& z,
             const nb::object& out) -> nb::object {
-           if (!isBatch(x)) throw nb::next_overload();
            const Points points = readPoints(x, y, z);
            const std::vector<double>& X = points.x; const std::vector<double>& Y = points.y; const std::vector<double>& Z = points.z;
            OutArray target;
@@ -545,14 +591,6 @@ NB_MODULE(meshsearch, m)
          "or a non-contiguous array raises meshsearch.Error.\n\n"
          "Raises meshsearch.Error if the arrays differ in length.")
 
-    .def("contains",
-         [](const meshsearch::MeshGrid& self, const double x, const double y, const double z) {
-           return self.contains(x, y, z);
-         },
-         "x"_a, "y"_a, "z"_a,
-         "True if a query at the point is accepted, that is, if the point lies\n"
-         "in the box. False for a NaN coordinate. Never raises.")
-
     .def("__repr__",
          [](const meshsearch::MeshGrid& self) {
            return nb::str("MeshGrid(objects={}, n_cells={}, cellsize={!r}, periodic={})").attr("format")(
@@ -566,7 +604,6 @@ NB_MODULE(meshsearch, m)
     .def("__deepcopy__", [](const meshsearch::MeshGrid& self, const nb::object&) { return meshsearch::MeshGrid(self); },
          "memo"_a,
          "A copy of the grid, independent of it and answering every query as it does.")
-
     // The array owns its data through a capsule, so it must not be handed out
     // under the reference_internal policy a property would use by default.
     .def_prop_ro("lims",
@@ -591,9 +628,24 @@ NB_MODULE(meshsearch, m)
                  "Per axis, whether the box is periodic: a tuple of three bools.")
 
     .def("nearest_object",
-         [](const meshsearch::MeshGrid& self, const nb::object& x, const nb::object& y, const nb::object& z,
+         nb::overload_cast<double, double, double>(&meshsearch::MeshGrid::nearestObject, nb::const_),
+         "x"_a, "y"_a, "z"_a,
+         "Index of the object nearest to a point. An object lying on the\n"
+         "point is at distance 0 and is the answer.")
+
+    .def("nearest_object",
+         [](const meshsearch::MeshGrid& self, const ScalarArg& index) {
+           return self.nearestObject(scalarIndex(index));
+         },
+         "index"_a,
+         "Index of the object nearest to an object. The query object is\n"
+         "excluded by identity, not by distance: another object coincident\n"
+         "with it is at distance 0 and may be the answer. A negative index\n"
+         "raises meshsearch.IndexError.")
+
+    .def("nearest_object",
+         [](const meshsearch::MeshGrid& self, const BatchArg& x, const nb::object& y, const nb::object& z,
             const nb::object& out) -> nb::object {
-           if (!isBatch(x)) throw nb::next_overload();
            const Points points = readPoints(x, y, z);
            const std::vector<double>& X = points.x; const std::vector<double>& Y = points.y; const std::vector<double>& Z = points.z;
            const size_t queries = X.size();
@@ -632,8 +684,7 @@ NB_MODULE(meshsearch, m)
          "call returns.")
 
     .def("nearest_object",
-         [](const meshsearch::MeshGrid& self, const nb::object& indices, const nb::object& out) -> nb::object {
-           if (!isBatch(indices)) throw nb::next_overload();
+         [](const meshsearch::MeshGrid& self, const BatchArg& indices, const nb::object& out) -> nb::object {
            const auto objects = readIndices(indices);
            const size_t queries = objects.size();
            OutArray target;
@@ -678,26 +729,31 @@ NB_MODULE(meshsearch, m)
          "may run, and may query the same grid; none may modify it until the\n"
          "call returns.")
 
-    .def("nearest_object",
-         nb::overload_cast<double, double, double>(&meshsearch::MeshGrid::nearestObject, nb::const_),
-         "x"_a, "y"_a, "z"_a,
-         "Index of the object nearest to a point. An object lying on the\n"
-         "point is at distance 0 and is the answer.")
-
-    .def("nearest_object",
-         [](const meshsearch::MeshGrid& self, const nb::object& index) {
-           return self.nearestObject(scalarIndex(index));
+    .def("nearest_objects",
+         [](const meshsearch::MeshGrid& self, const nb::object& n,
+            const double x, const double y, const double z) {
+           return indexArray(self.nearestObjects(readCount(n), x, y, z));
          },
-         "index"_a,
-         "Index of the object nearest to an object. The query object is\n"
-         "excluded by identity, not by distance: another object coincident\n"
-         "with it is at distance 0 and may be the answer. A negative index\n"
-         "raises meshsearch.IndexError.")
+         "n"_a, "x"_a, "y"_a, "z"_a,
+         "The n objects nearest to a point, nearest first; ties by ascending\n"
+         "index. A tie at the last place keeps the lower indices. A negative\n"
+         "n raises meshsearch.Error.")
+
+    .def("nearest_objects",
+         [](const meshsearch::MeshGrid& self, const nb::object& n, const ScalarArg& index) {
+           const unsigned int count = readCount(n);
+           return indexArray(self.nearestObjects(count, scalarIndex(index)));
+         },
+         "n"_a, "index"_a,
+         "The n objects nearest to an object, nearest first; ties by ascending\n"
+         "index. A tie at the last place keeps the lower indices. The query\n"
+         "object is excluded by identity, not by distance: another object\n"
+         "coincident with it is at distance 0 and is among them. A negative n\n"
+         "raises meshsearch.Error; a negative index, meshsearch.IndexError.")
 
     .def("nearest_objects",
          [](const meshsearch::MeshGrid& self, const nb::object& count,
-            const nb::object& x, const nb::object& y, const nb::object& z, const nb::object& out) -> nb::object {
-           if (!isBatch(x)) throw nb::next_overload();
+            const BatchArg& x, const nb::object& y, const nb::object& z, const nb::object& out) -> nb::object {
            const unsigned int n = readCount(count);
            const Points points = readPoints(x, y, z);
            const std::vector<double>& X = points.x; const std::vector<double>& Y = points.y; const std::vector<double>& Z = points.z;
@@ -742,8 +798,7 @@ NB_MODULE(meshsearch, m)
 
     .def("nearest_objects",
          [](const meshsearch::MeshGrid& self, const nb::object& count,
-            const nb::object& indices, const nb::object& out) -> nb::object {
-           if (!isBatch(indices)) throw nb::next_overload();
+            const BatchArg& indices, const nb::object& out) -> nb::object {
            const unsigned int n = readCount(count);
            const auto objects = readIndices(indices);
            const size_t queries = objects.size();
@@ -790,32 +845,31 @@ NB_MODULE(meshsearch, m)
          "may run, and may query the same grid; none may modify it until the\n"
          "call returns.")
 
-    .def("nearest_objects",
-         [](const meshsearch::MeshGrid& self, const nb::object& n,
-            const double x, const double y, const double z) {
-           return indexArray(self.nearestObjects(readCount(n), x, y, z));
+    .def("close_objects",
+         [](const meshsearch::MeshGrid& self, const double x, const double y, const double z,
+            const double rmax, const double rmin) {
+           return indexArray(self.closeObjects(x, y, z, rmax, rmin));
          },
-         "n"_a, "x"_a, "y"_a, "z"_a,
-         "The n objects nearest to a point, nearest first; ties by ascending\n"
-         "index. A tie at the last place keeps the lower indices. A negative\n"
-         "n raises meshsearch.Error.")
-
-    .def("nearest_objects",
-         [](const meshsearch::MeshGrid& self, const nb::object& n, const nb::object& index) {
-           const unsigned int count = readCount(n);
-           return indexArray(self.nearestObjects(count, scalarIndex(index)));
-         },
-         "n"_a, "index"_a,
-         "The n objects nearest to an object, nearest first; ties by ascending\n"
-         "index. A tie at the last place keeps the lower indices. The query\n"
-         "object is excluded by identity, not by distance: another object\n"
-         "coincident with it is at distance 0 and is among them. A negative n\n"
-         "raises meshsearch.Error; a negative index, meshsearch.IndexError.")
+         "x"_a, "y"_a, "z"_a, "rmax"_a, "rmin"_a = 0.,
+         "Objects at distance d from a point, with rmin <= d <= rmax, in\n"
+         "unspecified order. The interval is closed at both ends, so an object\n"
+         "at exactly either radius is returned. An object lying on the point\n"
+         "is at d = 0 and is returned.")
 
     .def("close_objects",
-         [](const meshsearch::MeshGrid& self, const nb::object& x, const nb::object& y, const nb::object& z,
+         [](const meshsearch::MeshGrid& self, const ScalarArg& index,
             const double rmax, const double rmin) {
-           if (!isBatch(x)) throw nb::next_overload();
+           return indexArray(self.closeObjects(scalarIndex(index), rmax, rmin));
+         },
+         "index"_a, "rmax"_a, "rmin"_a = 0.,
+         "Objects at distance d from an object, with rmin <= d <= rmax, in\n"
+         "unspecified order. The query object is excluded by identity, not by\n"
+         "distance: another object coincident with it is at d = 0 and is\n"
+         "returned. A negative index raises meshsearch.IndexError.")
+
+    .def("close_objects",
+         [](const meshsearch::MeshGrid& self, const BatchArg& x, const nb::object& y, const nb::object& z,
+            const double rmax, const double rmin) {
            const Points points = readPoints(x, y, z);
            const std::vector<double>& X = points.x; const std::vector<double>& Y = points.y; const std::vector<double>& Z = points.z;
            const size_t queries = X.size();
@@ -850,9 +904,8 @@ NB_MODULE(meshsearch, m)
          "call returns.")
 
     .def("close_objects",
-         [](const meshsearch::MeshGrid& self, const nb::object& indices,
+         [](const meshsearch::MeshGrid& self, const BatchArg& indices,
             const double rmax, const double rmin) {
-           if (!isBatch(indices)) throw nb::next_overload();
            const auto objects = readIndices(indices);
            meshsearch::MeshGrid::Batch found;
            {
@@ -893,32 +946,24 @@ NB_MODULE(meshsearch, m)
          "may run, and may query the same grid; none may modify it until the\n"
          "call returns.")
 
-    .def("close_objects",
-         [](const meshsearch::MeshGrid& self, const double x, const double y, const double z,
-            const double rmax, const double rmin) {
-           return indexArray(self.closeObjects(x, y, z, rmax, rmin));
-         },
+    .def("count_objects",
+         nb::overload_cast<double, double, double, double, double>(&meshsearch::MeshGrid::countObjects, nb::const_),
          "x"_a, "y"_a, "z"_a, "rmax"_a, "rmin"_a = 0.,
-         "Objects at distance d from a point, with rmin <= d <= rmax, in\n"
-         "unspecified order. The interval is closed at both ends, so an object\n"
-         "at exactly either radius is returned. An object lying on the point\n"
-         "is at d = 0 and is returned.")
-
-    .def("close_objects",
-         [](const meshsearch::MeshGrid& self, const nb::object& index,
-            const double rmax, const double rmin) {
-           return indexArray(self.closeObjects(scalarIndex(index), rmax, rmin));
-         },
-         "index"_a, "rmax"_a, "rmin"_a = 0.,
-         "Objects at distance d from an object, with rmin <= d <= rmax, in\n"
-         "unspecified order. The query object is excluded by identity, not by\n"
-         "distance: another object coincident with it is at d = 0 and is\n"
-         "returned. A negative index raises meshsearch.IndexError.")
+         "Number of objects close_objects would return for a point, counted\n"
+         "without collecting them.")
 
     .def("count_objects",
-         [](const meshsearch::MeshGrid& self, const nb::object& x, const nb::object& y, const nb::object& z,
+         [](const meshsearch::MeshGrid& self, const ScalarArg& index, const double rmax, const double rmin) {
+           return self.countObjects(scalarIndex(index), rmax, rmin);
+         },
+         "index"_a, "rmax"_a, "rmin"_a = 0.,
+         "Number of objects close_objects would return for an object, which\n"
+         "is excluded, counted without collecting them. A negative index raises\n"
+         "meshsearch.IndexError.")
+
+    .def("count_objects",
+         [](const meshsearch::MeshGrid& self, const BatchArg& x, const nb::object& y, const nb::object& z,
             const double rmax, const double rmin, const nb::object& out) -> nb::object {
-           if (!isBatch(x)) throw nb::next_overload();
            const Points points = readPoints(x, y, z);
            const std::vector<double>& X = points.x; const std::vector<double>& Y = points.y; const std::vector<double>& Z = points.z;
            const size_t queries = X.size();
@@ -959,9 +1004,8 @@ NB_MODULE(meshsearch, m)
          "call returns.")
 
     .def("count_objects",
-         [](const meshsearch::MeshGrid& self, const nb::object& indices,
+         [](const meshsearch::MeshGrid& self, const BatchArg& indices,
             const double rmax, const double rmin, const nb::object& out) -> nb::object {
-           if (!isBatch(indices)) throw nb::next_overload();
            const auto objects = readIndices(indices);
            const size_t queries = objects.size();
            OutArray target;
@@ -1005,21 +1049,6 @@ NB_MODULE(meshsearch, m)
          "The GIL is released while the queries run, so other Python threads\n"
          "may run, and may query the same grid; none may modify it until the\n"
          "call returns.")
-
-    .def("count_objects",
-         nb::overload_cast<double, double, double, double, double>(&meshsearch::MeshGrid::countObjects, nb::const_),
-         "x"_a, "y"_a, "z"_a, "rmax"_a, "rmin"_a = 0.,
-         "Number of objects close_objects would return for a point, counted\n"
-         "without collecting them.")
-
-    .def("count_objects",
-         [](const meshsearch::MeshGrid& self, const nb::object& index, const double rmax, const double rmin) {
-           return self.countObjects(scalarIndex(index), rmax, rmin);
-         },
-         "index"_a, "rmax"_a, "rmin"_a = 0.,
-         "Number of objects close_objects would return for an object, which\n"
-         "is excluded, counted without collecting them. A negative index raises\n"
-         "meshsearch.IndexError.")
 
     .def("get_cell", &meshsearch::MeshGrid::get_cell, "x"_a, "y"_a, "z"_a,
          "Linear index of the cell containing a point.")

@@ -1,5 +1,6 @@
-"""What the cell side costs: build time, memory and the three query kinds,
-swept over cell sides of one to four mean separations at two data sizes.
+"""What the cell side costs: build time, memory, cell occupancy and the three
+query kinds, swept over cell sides of one to four mean separations at two data
+sizes.
 
 The cell side is meshsearch's one tuning parameter. A fine grid holds few
 objects per cell and many cells; a coarse one the reverse, and the offset mask
@@ -68,6 +69,24 @@ def measure(grid, queries, radius):
     }
 
 
+def occupancy(grid, x, y, z):
+    """How the objects spread over the cells: the fraction of cells left
+    empty, the mean count over the cells that are not, and the 99th
+    percentile of the count over all cells. Cells are located from the
+    grid's own box and cell side, with the last cell of an axis taking a
+    point on its upper edge."""
+    lims, side, shape = grid.lims, grid.cellsize, grid.n_cells
+    linear = np.zeros(len(x), dtype=np.int64)
+    for axis, coord in enumerate((x, y, z)):
+        cell = np.floor((coord - lims[axis, 0]) / side).astype(np.int64)
+        linear = linear * shape[axis] + np.clip(cell, 0, shape[axis] - 1)
+    counts = np.bincount(linear, minlength=shape[0] * shape[1] * shape[2])
+    filled = counts[counts > 0]
+    return {"empty_fraction": float(1 - filled.size / counts.size),
+            "mean_per_filled_cell": float(filled.mean()),
+            "p99_per_cell": float(np.percentile(counts, 99))}
+
+
 def run_sweep(n, factor, dist="uniform"):
     import meshsearch
     x, y, z = columns(points(n, dist))
@@ -87,6 +106,7 @@ def run_sweep(n, factor, dist="uniform"):
     result = {"dist": dist, "n": n, "factor": factor, "cellsize": cellsize, "build_s": build,
               "memory_mib": memory, "n_cells": list(grid.n_cells), "cells": cells,
               "objects_per_cell": n / cells}
+    result.update(occupancy(grid, x, y, z))
     result.update(describe(dist, n))
     result.update(measure(grid, queries, radius))
     return result
