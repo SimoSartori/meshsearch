@@ -539,6 +539,7 @@ namespace meshsearch {
     std::array<double, 3> m_slack_axis = {0., 0., 0.};
 
     std::shared_ptr<const std::vector<std::vector<GridOffset>>> m_mask;
+    std::shared_ptr<const std::vector<std::vector<size_t>>> m_runs;
 
     std::vector<CellBlock> m_cells;
 
