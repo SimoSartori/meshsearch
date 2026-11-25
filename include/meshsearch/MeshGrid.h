@@ -12,13 +12,13 @@
 
 namespace meshsearch {
 
-  /// Thrown on invalid input or on a point outside the box.
+  /// Thrown on invalid input: a point outside the box, an invalid argument,
+  /// or a query the grid cannot answer.
   class Error : public std::runtime_error {
   public:
     /// @param what the message, returned by what()
     explicit Error (const std::string& what);
   };
-
 
   /// Thrown on an index that is out of range or names a removed object.
   class IndexError : public Error {
@@ -26,7 +26,6 @@ namespace meshsearch {
     /// @param what the message, returned by what()
     explicit IndexError (const std::string& what);
   };
-
 
   /**
    *  @brief Uniform cubic mesh over a set of points, for neighbour queries.
@@ -41,8 +40,15 @@ namespace meshsearch {
    *  members may not.
    *
    *  Coordinates, cellsize and radii must all be in the same unit; none is
-   *  imposed. Distances are Euclidean, with the minimum image on the periodic
-   *  axes, if any: see the constructor.
+   *  imposed. Every member taking a point raises Error if the point lies
+   *  outside the box (see contains).
+   *
+   *  Distances are Euclidean, with the minimum image on periodic axes: along
+   *  a periodic axis of period L the displacement is taken in [-L/2, L/2),
+   *  so each object is seen once, at its nearest image. Distances are
+   *  compared through their squares, computed in double precision as
+   *  dx*dx+dy*dy+dz*dz. Ties between equal distances are broken by
+   *  ascending index. No result depends on how objects fall into cells.
    *
    *  Any member that allocates may throw std::bad_alloc, which is not
    *  translated into Error. A constructor that throws builds nothing, and
@@ -53,8 +59,13 @@ namespace meshsearch {
    *  and is shared. Moves transfer the storage without copying it; a
    *  moved-from grid may only be destroyed or assigned to.
    *
-   *  The order of the objects within one cell, and so of the results of
-   *  get_objectsInCell and closeObjects, is unspecified.
+   *  The same input (coordinates in the same order, cellsize, options, the
+   *  same sequence of addObject and removeObject, the same queries) gives
+   *  the same results in the same order, on every platform and with any
+   *  number of threads; a copy answers as the original does. Which order
+   *  the objects take within a cell, and so the order of the results of
+   *  closeObjects and get_objectsInCell, is not part of the interface and
+   *  may change between versions.
    */
   class MeshGrid final {
 
@@ -72,8 +83,11 @@ namespace meshsearch {
     /// Construction options.
     struct Options {
       /// Box as {{xlo,xhi},{ylo,yhi},{zlo,zhi}}, finite, with lo <= hi on each
-      /// axis. If unset, the data range padded by a margin proportional to
-      /// it. Required when any axis is periodic.
+      /// axis, containing every coordinate. If unset, the box is fitted to
+      /// the data with a small margin, and a query point outside the data's
+      /// range may raise Error: set it whenever queries can fall outside the
+      /// data. Required when any axis is periodic, or when there are no
+      /// points.
       std::optional<std::array<std::array<double,2>,3>> limits;
       /// Per axis, whether distances wrap around the box. All false by default.
       std::array<bool,3> periodic{};
@@ -91,56 +105,23 @@ namespace meshsearch {
     /**
      *  @brief Build the grid.
      *  @param X,Y,Z coordinates, all of the same length, copied into the grid
-     *  @param cellsize cell side, finite and positive; one to four mean
-     *    separations of the data is the usual range, and docs/benchmark.md
-     *    measures what it costs. With a periodic axis it is an upper bound:
-     *    see below
-     *  @param opt box and periodic axes; see Options
-     *  @throw Error if the vectors differ in length; if cellsize is not finite
-     *    and positive, or so small that 1/cellsize overflows a double; if
-     *    opt.limits is not finite or has lo > hi on an axis; if a coordinate
-     *    is not finite or lies outside the limits; if the square of the
-     *    grown box's diagonal overflows a double; if the grid would need
-     *    more than 2147483647 cells along an axis, or more cells or memory
-     *    than 64-bit sizes can count; or if there are more than 4294967295
-     *    objects
-     *  @throw Error on a periodic axis if opt.limits is unset; if a period
-     *    hi-lo is below 2^-1000 (zero extent included) or if
-     *    |lo|+|hi|+4*(hi-lo) exceeds 2^1000; or if a period is not an integer
-     *    multiple of the shortest one, within a relative 1e-12
+     *  @param cellsize cell side, finite and positive; on a periodic grid an
+     *    upper bound, see get_cellsize
+     *  @param opt the box and the periodic axes; see Options
+     *  @throw Error if the vectors differ in length or hold more than
+     *    4294967295 points; if a coordinate is not finite or lies outside
+     *    the limits; if cellsize or the limits are invalid; if there are no
+     *    points and no limits; if the grid would be too large to address
+     *  @throw Error on a periodic axis, if the limits are unset, if the
+     *    period is below 2^-1000 or the limits too large to shift by it, or
+     *    if the period is not an integer multiple of the shortest one,
+     *    within a relative 1e-12
      *
      *  Each non-periodic side of the box is grown symmetrically to a whole
-     *  number of cells. The grown box contains the limits; where rounding would
-     *  leave it inside them, one more cell is added. get_lims returns the grown
-     *  box, and members validate points against it, so a point outside the
-     *  limits may still be accepted.
-     *
-     *  Distances are compared through their squares, computed in double
-     *  precision as @c dx*dx+dy*dy+dz*dz. @c closeObjects returns every
-     *  object whose squared distance lies between @c Rmin*Rmin and
-     *  @c Rmax*Rmax, both included; the nearest-neighbour queries rank
-     *  objects by the same quantity, ties broken by index. The result
-     *  never depends on how objects fall into cells.
-     *
-     *  An axis of zero extent, where every coordinate is equal or lo == hi,
-     *  gets one cell, and the box is grown symmetrically around it to one
-     *  cellsize. This does not apply to a periodic axis, which needs a period.
-     *
-     *  A periodic axis has period L = hi-lo, computed in double, and its box
-     *  is exactly the limits: it is not grown and not padded, and coordinates
-     *  are not wrapped, so a point outside the limits is an error and a point
-     *  at lo and one at hi are two distinct places. The displacement along
-     *  the axis is dx = y-q, replaced by dx-L if dx >= L/2 and by dx+L if
-     *  dx < -L/2, so that each object is seen once, at its nearest image
-     *  (a displacement of exactly +L/2 is taken as -L/2). Both corrections
-     *  are exact. Every query then uses this distance, and any radius is
-     *  valid, +inf included. All periodic axes share one cell side c, no
-     *  larger than cellsize and returned by get_cellsize: the shortest
-     *  period is split into the smallest whole number of cells that
-     *  keeps them within cellsize, and each periodic axis holds a whole
-     *  number of them.
-     *
-     *  Every check is made before anything is allocated.
+     *  number of cells, always containing the limits; get_lims returns the
+     *  grown box. An axis of zero extent gets one cell. A periodic axis has
+     *  period hi-lo and its box is exactly the limits; coordinates are not
+     *  wrapped. Every check is made before anything is allocated.
      */
     MeshGrid (const std::vector<double>& X,
               const std::vector<double>& Y,
@@ -148,9 +129,8 @@ namespace meshsearch {
               double cellsize,
               const Options& opt);
 
-    /// As above with default Options: the data range padded, no periodic axis.
-    /// A separate overload, because a nested aggregate with default member
-    /// initializers cannot be a default argument inside its own class.
+    /// As above with default Options: the box fitted to the data, no
+    /// periodic axis.
     MeshGrid (const std::vector<double>& X,
               const std::vector<double>& Y,
               const std::vector<double>& Z,
@@ -194,7 +174,9 @@ namespace meshsearch {
     /// Cells per axis.
     std::array<unsigned int, 3> get_nCells () const;
 
-    /// Cell side. It is the cellsize given unless an axis is periodic.
+    /// Cell side. The cellsize given, unless an axis is periodic: then the
+    /// largest side not above it that fits a whole number of times into the
+    /// shortest period.
     double get_cellsize () const;
 
     /// Per axis, whether the box is periodic.
@@ -233,8 +215,9 @@ namespace meshsearch {
                                              const std::vector<double>& Z) const;
 
     /// As above, into @p out, the last argument, which is cleared first and
-    /// keeps its capacity; its content is unspecified if the call throws.
-    /// This holds for every member taking @p out.
+    /// keeps its capacity; its content is unspecified if the call throws, and
+    /// no other thread may use it during the call. This holds for every
+    /// member taking @p out.
     void nearestObject (const std::vector<double>& X,
                         const std::vector<double>& Y,
                         const std::vector<double>& Z,
@@ -303,7 +286,7 @@ namespace meshsearch {
                                               const std::vector<double>& Y,
                                               const std::vector<double>& Z) const;
 
-    /// As above, into @p out.
+    /// The point batch of nearestObjects, into @p out.
     void nearestObjects (unsigned int N,
                          const std::vector<double>& X,
                          const std::vector<double>& Y,
@@ -328,7 +311,7 @@ namespace meshsearch {
      *  @param X,Y,Z the point, which must lie inside the box
      *  @param Rmax outer radius, inclusive; +inf is accepted
      *  @param Rmin inner radius, inclusive; 0 by default, giving a ball
-     *  @return the indices, in unspecified order
+     *  @return the indices; their order is not meaningful (see the class)
      *  @throw Error if the point is outside the box, if a radius is negative
      *    or NaN, or if Rmin exceeds Rmax
      *
@@ -353,7 +336,7 @@ namespace meshsearch {
      *  @param index the object to measure from, itself excluded
      *  @param Rmax outer radius, inclusive; +inf is accepted
      *  @param Rmin inner radius, inclusive; 0 by default, giving a ball
-     *  @return the indices, in unspecified order
+     *  @return the indices; their order is not meaningful (see the class)
      *  @throw IndexError if @p index is out of range or removed
      *  @throw Error if a radius is negative or NaN, or if Rmin exceeds Rmax
      *
@@ -394,7 +377,8 @@ namespace meshsearch {
                         const std::vector<double>& Z,
                         double Rmax, double Rmin = 0.) const;
 
-    /// As above, into @p out; with Rmin, then with Rmin = 0.
+    /// The point batch of closeObjects, into @p out, whose indices and
+    /// offsets are both replaced; with Rmin, then with Rmin = 0.
     void closeObjects (const std::vector<double>& X,
                        const std::vector<double>& Y,
                        const std::vector<double>& Z,
@@ -413,7 +397,8 @@ namespace meshsearch {
     Batch closeObjects (const std::vector<unsigned int>& indices,
                         double Rmax, double Rmin = 0.) const;
 
-    /// As above, into @p out; with Rmin, then with Rmin = 0.
+    /// The index batch of closeObjects, into @p out, whose indices and
+    /// offsets are both replaced; with Rmin, then with Rmin = 0.
     void closeObjects (const std::vector<unsigned int>& indices,
                        double Rmax, double Rmin, Batch& out) const;
     void closeObjects (const std::vector<unsigned int>& indices,
@@ -442,7 +427,8 @@ namespace meshsearch {
                                              const std::vector<double>& Z,
                                              double Rmax, double Rmin = 0.) const;
 
-    /// As above, into @p out; with Rmin, then with Rmin = 0.
+    /// The point batch of countObjects, into @p out; with Rmin, then with
+    /// Rmin = 0.
     void countObjects (const std::vector<double>& X,
                        const std::vector<double>& Y,
                        const std::vector<double>& Z,
@@ -458,7 +444,8 @@ namespace meshsearch {
     std::vector<std::uint64_t> countObjects (const std::vector<unsigned int>& indices,
                                              double Rmax, double Rmin = 0.) const;
 
-    /// As above, into @p out; with Rmin, then with Rmin = 0.
+    /// The index batch of countObjects, into @p out; with Rmin, then with
+    /// Rmin = 0.
     void countObjects (const std::vector<unsigned int>& indices,
                        double Rmax, double Rmin,
                        std::vector<std::uint64_t>& out) const;
@@ -466,7 +453,9 @@ namespace meshsearch {
                        double Rmax, std::vector<std::uint64_t>& out) const;
 
     /**
-     *  @brief Linear index of the cell containing a point.
+     *  @brief Linear index of the cell containing a point:
+     *    (ix*ny+iy)*nz+iz, with {ix,iy,iz} from get_cellCoords and
+     *    {nx,ny,nz} from get_nCells.
      *  @throw Error if the point is outside the box
      *
      *  A point within rounding of a cell face may be assigned to the cell on
@@ -512,77 +501,49 @@ namespace meshsearch {
 
   private:
 
-    /// Cell offset relative to a target cell.
     struct GridOffset {
-      int i;  ///< offset along x, in cells
-      int j;  ///< offset along y, in cells
-      int k;  ///< offset along z, in cells
+      int i;
+      int j;
+      int k;
     };
 
-    /// Slots of one cell: its objects fill @c count slots from @c start, in
-    /// insertion order, and spare slots follow up to @c cap.
     struct CellBlock {
-      size_t start;        ///< first slot
-      unsigned int count;  ///< objects in the cell
-      unsigned int cap;    ///< slots reserved for the cell
+      size_t start;
+      unsigned int count;
+      unsigned int cap;
     };
 
-    /// Coordinates by slot, so that a cell's objects are contiguous. Spare
-    /// slots, and slots a block has moved out of, hold no object.
     std::vector<double> m_X, m_Y, m_Z;
 
-    /// Object index of the object in each slot.
     std::vector<unsigned int> m_toPublic;
 
-    /// Slot of each object, by object index; stale once it is removed.
     std::vector<size_t> m_toInternal;
 
-    /// Per object, whether it is still in the grid; indexed by object index.
     std::vector<char> m_alive;
 
-    /// Count of live objects, maintained by removeObject and addObject.
     unsigned int m_nObjects = 0;
 
-    /// Cell side.
     double m_cellsize = 0.;
 
-    /// Cells per axis.
     std::array<unsigned int, 3> m_nCells = {0, 0, 0};
 
-    /// The box, grown to whole cells, as {{xlo,xhi},{ylo,yhi},{zlo,zhi}}.
     std::array<std::array<double,2>,3> m_lims{};
 
-    /// Per axis, whether it is periodic, and whether any is.
     std::array<bool, 3> m_periodic = {false, false, false};
     bool m_periodic_any = false;
 
-    /// Period of each periodic axis (zero on the others), and a rounded-up
-    /// bound on its difference from m_nCells times m_cellsize.
     std::array<double, 3> m_period = {0., 0., 0.};
     std::array<double, 3> m_omega = {0., 0., 0.};
 
-    /// Rounded-up bound, in cells, on how far a distance can fall below the
-    /// guaranteed distance of its shell, over all axes; and the same per
-    /// axis, in length, on the periodic ones.
     double m_slack = 0.;
     std::array<double, 3> m_slack_axis = {0., 0., 0.};
 
-    /// Cell offsets grouped by guaranteed minimum distance, in cells. Depends
-    /// only on m_nCells and m_periodic, so copies of the grid share it.
     std::shared_ptr<const std::vector<std::vector<GridOffset>>> m_mask;
 
-    /// Slot block of each cell, addressed by getLinearIndex. A full cell's
-    /// block moves to the end with at least twice the room.
     std::vector<CellBlock> m_cells;
 
-    /// Cell coordinates to linear cell index.
     size_t getLinearIndex (unsigned int ix, unsigned int iy, unsigned int iz) const;
 
-    /// Visit every object of the cells that can hold one within the threshold
-    /// of the point, from shell @p Rmin on. @p visit gets the first slot of
-    /// the cell, the position in it and the squared distance; @p threshold is
-    /// read before each shell and cell. walk dispatches to walkPlain or, on a
-    /// grid with a periodic axis, to walkPeriodic.
     template <class Threshold, class Visit>
     void walk (const std::array<unsigned int, 3>& target,
                double X, double Y, double Z, double Rmin,
@@ -596,9 +557,6 @@ namespace meshsearch {
                        double X, double Y, double Z, double Rmin,
                        Threshold&& threshold, Visit&& visit) const;
 
-    /// The single queries on a grid with a periodic axis. @p index, when
-    /// not null, names the object the query starts from and replaces the
-    /// point.
     unsigned int nearestObjectPeriodic (double X, double Y, double Z,
                                         const unsigned int* index) const;
     void nearestObjectsPeriodic (std::vector<unsigned int>& out, unsigned int N,
@@ -609,12 +567,8 @@ namespace meshsearch {
                                double Rmax, double Rmin,
                                const unsigned int* index) const;
 
-    /// Linear index of the cell holding object @p index; 0 if it is not
-    /// alive, which the query itself then reports.
     size_t objectCell (unsigned int index) const;
 
-    /// The core of countObjects, on a validated query; with @p Exclude,
-    /// slot @p self is skipped.
     template <bool Exclude, class Sink>
     void closeScan (const std::array<unsigned int, 3>& target,
                     double X, double Y, double Z, size_t self,

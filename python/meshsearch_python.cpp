@@ -397,19 +397,25 @@ namespace nanobind::detail {
 
 NB_MODULE(meshsearch, m)
 {
-  m.doc() = "A uniform cubic mesh over a set of points, for neighbour queries.";
+  m.doc() =
+    "A uniform cubic mesh over a set of points, for neighbour queries.\n\n"
+    "MeshGrid holds the points and answers the queries; Batch is what a\n"
+    "batched close_objects returns; Error and IndexError are the errors the\n"
+    "grid raises.";
 
   // The C++ hierarchy is mirrored: meshsearch::IndexError derives from
   // meshsearch::Error, so meshsearch.IndexError derives from meshsearch.Error
   // as well as from Python's IndexError. Either base catches it, exactly as
   // catch (const Error&) and catch (const IndexError&) both do in C++.
   nb::object error_type = nb::exception<meshsearch::Error>(m, "Error", PyExc_ValueError);
-  error_type.attr("__doc__") = "Thrown on invalid input or on a point outside the box.";
+  error_type.attr("__doc__") = "Raised on invalid input: a point outside the box, an invalid argument,\n"
+    "or a query the grid cannot answer.";
 
   nb::object bases = nb::make_tuple(error_type, nb::borrow(PyExc_IndexError));
   PyObject* index_error = PyErr_NewExceptionWithDoc(
     "meshsearch.IndexError",
-    "Thrown on an index that is out of range or names a removed object.",
+    "Raised on an index that is negative, out of range or names a removed\n"
+    "object. Also a meshsearch.Error and a built-in IndexError.",
     bases.ptr(), nullptr);
   if (index_error == nullptr) throw nb::python_error();
   m.attr("IndexError") = nb::steal(index_error);
@@ -449,8 +455,8 @@ NB_MODULE(meshsearch, m)
       "Several threads may query one grid at the same time; add_object and\n"
       "remove_object need that no other thread uses it.\n\n"
       "Batched queries take any array-like for the coordinates: a float64 or\n"
-      "integer array is read as it is, without a copy, and anything else, a list\n"
-      "or a float32 array for instance, is converted by numpy first.\n\n"
+      "integer array is used as it is, and anything else, a list or a float32\n"
+      "array for instance, is converted by numpy first.\n\n"
       "A grid can be copied with copy.copy and copy.deepcopy; the copy is\n"
       "independent and answers every query as the original does. Grids are not\n"
       "picklable: for parallel work use threads, which share one grid, or\n"
@@ -484,34 +490,39 @@ NB_MODULE(meshsearch, m)
          },
          "x"_a, "y"_a, "z"_a, "cellsize"_a, nb::kw_only(),
          "limits"_a = nb::none(), "periodic"_a = false,
-         "Build the grid over the points, which must be of equal length.\n\n"
-         "limits, keyword-only, is ((xlo,xhi),(ylo,yhi),(zlo,zhi)); when\n"
-         "omitted, the data range padded by a margin proportional to it. Each\n"
-         "non-periodic side of the box is grown symmetrically to a whole number\n"
-         "of cells, and always contains limits: where rounding would leave it\n"
-         "inside them, one more cell is added. An axis of zero extent gets one\n"
-         "cell.\n\n"
+         "Build the grid over the points x, y, z, arrays of equal length that\n"
+         "are copied into the grid. Coordinates, cellsize and every radius\n"
+         "must be in the same unit. cellsize is the cell side, the one tuning\n"
+         "parameter: two mean separations, (volume / number of points) ** (1/3),\n"
+         "is a starting value for uniform data; the guide shows what other\n"
+         "choices cost.\n\n"
+         "limits, keyword-only, is the box ((xlo,xhi),(ylo,yhi),(zlo,zhi)), and\n"
+         "must contain every point. When omitted, the box is fitted to the\n"
+         "points with a small margin, and a query point outside their range\n"
+         "may raise meshsearch.Error: give limits whenever queries can fall\n"
+         "outside the data. Each non-periodic side of the box is grown\n"
+         "symmetrically to a whole number of cells and always contains the\n"
+         "limits; an axis of zero extent gets one cell.\n\n"
          "periodic, keyword-only, is a bool for all three axes or a triple of\n"
-         "bools, one per axis; the default is False. On a periodic axis the box\n"
-         "is exactly limits, which are then required, and distances are\n"
-         "minimum-image distances: the displacement along the axis is\n"
-         "dx = y - q, replaced by dx - L if dx >= L/2 and by dx + L if\n"
-         "dx < -L/2, where L = hi - lo (a displacement of exactly +L/2 is taken\n"
-         "as -L/2). Each object is seen once, at its nearest image, and any\n"
-         "radius is valid, +inf included. Coordinates are not wrapped: a point\n"
-         "outside limits is an error. The periodic sides must be integer\n"
-         "multiples of the shortest one, within a relative 1e-12. All periodic\n"
-         "axes share one cell side, never larger than cellsize; the value\n"
-         "actually used is the cellsize property.\n\n"
-         "Raises meshsearch.Error for a cellsize that is not finite and\n"
-         "positive, or so small that 1/cellsize overflows a double; limits\n"
-         "that are not finite or have lo > hi; a coordinate that is not finite\n"
-         "or outside limits; a box whose squared diagonal overflows a double\n"
-         "(an extent of about 1e154 along an axis); or a grid too large to\n"
-         "count; for a periodic axis without limits, with a period below 2**-1000\n"
-         "(zero extent included) or too large for its cells to be addressed, or\n"
-         "not an integer multiple of the shortest. MemoryError if the grid cannot\n"
-         "be allocated. TypeError if periodic is neither a bool nor three bools.")
+         "bools; the default is False. A periodic axis requires limits, and its\n"
+         "box is exactly them, with period L = hi - lo. Distances along it are\n"
+         "minimum-image distances, the displacement taken in [-L/2, L/2), so\n"
+         "each object is seen once and any radius is valid, +inf included.\n"
+         "Coordinates are not wrapped. The periods must be integer multiples\n"
+         "of the shortest one, within a relative 1e-12. All cells share one\n"
+         "side, never larger than cellsize; the cellsize property gives it.\n\n"
+         "Raises meshsearch.Error if the arrays differ in length or hold more\n"
+         "than 4294967295 points; if a coordinate is not finite or lies outside\n"
+         "limits; if cellsize is not finite and positive, or so small that\n"
+         "1/cellsize overflows; if limits is not 3x2, not finite, or has\n"
+         "lo > hi; if there are no points and no limits; if the box is so large\n"
+         "that its squared diagonal overflows, or the grid would need more than\n"
+         "2147483647 cells along an axis; and, for a periodic axis, if limits\n"
+         "is missing, the period is below 2**-1000 or the limits too large to\n"
+         "shift by it, or the period is not an integer multiple of the\n"
+         "shortest. TypeError if periodic is neither a bool nor three bools,\n"
+         "or the coordinates are not real numbers. MemoryError if the grid\n"
+         "cannot be allocated.")
 
     .def("__len__", &meshsearch::MeshGrid::get_nObjects,
          "Number of objects in the grid, excluding removed ones.")
@@ -523,7 +534,8 @@ NB_MODULE(meshsearch, m)
          "index"_a,
          "True if index names an object still in the grid. A negative index,\n"
          "or one out of range or removed, is False: the one member taking an\n"
-         "index that does not raise IndexError.")
+         "index that does not raise IndexError.\n\n"
+         "Raises TypeError if index is not an integer.")
 
     .def("is_alive",
          [](const meshsearch::MeshGrid& self, const BatchArg& indices, const nb::object& out) -> nb::object {
@@ -544,7 +556,7 @@ NB_MODULE(meshsearch, m)
          "For each index of an array-like of integers, whether it names an\n"
          "object still in the grid: a bool array, in order. As for a single\n"
          "index, one that is negative or out of range is False, not an error.\n"
-         "An array of integers of any dtype is read as it is; a list or tuple\n"
+         "An array of integers of any dtype is used as it is; a list or tuple\n"
          "is converted first. Anything that is not integers raises TypeError;\n"
          "anything that is not one-dimensional raises meshsearch.Error.\n\n"
          "out, keyword-only, is an array to write the result into instead of\n"
@@ -560,7 +572,8 @@ NB_MODULE(meshsearch, m)
          },
          "x"_a, "y"_a, "z"_a,
          "True if a query at the point is accepted, that is, if the point lies\n"
-         "in the box. False for a NaN coordinate. Never raises.")
+         "in the box. False for a NaN coordinate. Raises nothing for any real\n"
+         "coordinates; TypeError if one is not a real number.")
 
     .def("contains",
          [](const meshsearch::MeshGrid& self, const BatchArg& x, const nb::object& y, const nb::object& z,
@@ -582,21 +595,24 @@ NB_MODULE(meshsearch, m)
          "x"_a, "y"_a, "z"_a, nb::kw_only(), "out"_a = nb::none(),
          "For each of an array of points, whether a query at it is accepted,\n"
          "that is, whether it lies in the box: a bool array, in query order.\n"
-         "False for a NaN coordinate. Never raises on a point.\n\n"
+         "False for a NaN coordinate; no point makes it raise.\n\n"
          "out, keyword-only, is an array to write the result into instead of\n"
          "allocating one, and is then returned. It must already be exactly\n"
          "the result: a writeable, C-contiguous bool array of shape\n"
          "(n_query,). Nothing is converted: a wrong dtype, a read-only array\n"
          "or something that is not an array raises TypeError; a wrong shape\n"
          "or a non-contiguous array raises meshsearch.Error.\n\n"
-         "Raises meshsearch.Error if the arrays differ in length.")
+         "Raises meshsearch.Error if the arrays differ in length or are not\n"
+         "one-dimensional; TypeError if they do not hold real numbers.")
 
     .def("__repr__",
          [](const meshsearch::MeshGrid& self) {
            return nb::str("MeshGrid(objects={}, n_cells={}, cellsize={!r}, periodic={})").attr("format")(
              self.get_nObjects(), triple(self.get_nCells()), self.get_cellsize(),
              nb::make_tuple(self.get_periodic()[0], self.get_periodic()[1], self.get_periodic()[2]));
-         })
+         },
+         "A short description: the object count, cells per axis, cell side and\n"
+         "periodic axes.")
 
     .def("__copy__", [](const meshsearch::MeshGrid& self) { return meshsearch::MeshGrid(self); },
          "A copy of the grid, independent of it and answering every query as it does.")
@@ -631,7 +647,9 @@ NB_MODULE(meshsearch, m)
          nb::overload_cast<double, double, double>(&meshsearch::MeshGrid::nearestObject, nb::const_),
          "x"_a, "y"_a, "z"_a,
          "Index of the object nearest to a point. An object lying on the\n"
-         "point is at distance 0 and is the answer.")
+         "point is at distance 0 and is the answer; ties go to the lower index.\n\n"
+         "Raises meshsearch.Error if the point is outside the box or the grid\n"
+         "holds no objects.")
 
     .def("nearest_object",
          [](const meshsearch::MeshGrid& self, const ScalarArg& index) {
@@ -640,8 +658,10 @@ NB_MODULE(meshsearch, m)
          "index"_a,
          "Index of the object nearest to an object. The query object is\n"
          "excluded by identity, not by distance: another object coincident\n"
-         "with it is at distance 0 and may be the answer. A negative index\n"
-         "raises meshsearch.IndexError.")
+         "with it is at distance 0 and may be the answer.\n\n"
+         "Raises meshsearch.IndexError if index is negative, out of range or\n"
+         "removed; meshsearch.Error if no other object remains; TypeError if\n"
+         "index is not an integer.")
 
     .def("nearest_object",
          [](const meshsearch::MeshGrid& self, const BatchArg& x, const nb::object& y, const nb::object& z,
@@ -707,7 +727,7 @@ NB_MODULE(meshsearch, m)
          "query, in query order.\n\n"
          "indices is a 1-D array-like of integers, such as the uint32 arrays the\n"
          "queries return. An array of any integer dtype is read as it is,\n"
-         "without a copy, and values are never wrapped: a negative value or\n"
+         "never cast, so values are never wrapped: a negative value or\n"
          "one that is not a valid index raises meshsearch.IndexError. A list or\n"
          "tuple of integers is converted first. Anything that is not integers\n"
          "raises TypeError; anything that is not one-dimensional raises\n"
@@ -735,9 +755,11 @@ NB_MODULE(meshsearch, m)
            return indexArray(self.nearestObjects(readCount(n), x, y, z));
          },
          "n"_a, "x"_a, "y"_a, "z"_a,
-         "The n objects nearest to a point, nearest first; ties by ascending\n"
-         "index. A tie at the last place keeps the lower indices. A negative\n"
-         "n raises meshsearch.Error.")
+         "The n objects nearest to a point, nearest first, as a uint32 array;\n"
+         "ties by ascending index, so a tie at the last place keeps the lower\n"
+         "indices. n = 0 returns an empty array.\n\n"
+         "Raises meshsearch.Error if the point is outside the box, or if n is\n"
+         "negative or exceeds the number of objects.")
 
     .def("nearest_objects",
          [](const meshsearch::MeshGrid& self, const nb::object& n, const ScalarArg& index) {
@@ -748,8 +770,10 @@ NB_MODULE(meshsearch, m)
          "The n objects nearest to an object, nearest first; ties by ascending\n"
          "index. A tie at the last place keeps the lower indices. The query\n"
          "object is excluded by identity, not by distance: another object\n"
-         "coincident with it is at distance 0 and is among them. A negative n\n"
-         "raises meshsearch.Error; a negative index, meshsearch.IndexError.")
+         "coincident with it is at distance 0 and is among them.\n\n"
+         "Raises meshsearch.IndexError if index is negative, out of range or\n"
+         "removed; meshsearch.Error if n is negative or not below the number of\n"
+         "objects; TypeError if index is not an integer.")
 
     .def("nearest_objects",
          [](const meshsearch::MeshGrid& self, const nb::object& count,
@@ -822,7 +846,7 @@ NB_MODULE(meshsearch, m)
          "index: a uint32 array of shape (len(indices), n).\n\n"
          "indices is a 1-D array-like of integers, such as the uint32 arrays the\n"
          "queries return. An array of any integer dtype is read as it is,\n"
-         "without a copy, and values are never wrapped: a negative value or\n"
+         "never cast, so values are never wrapped: a negative value or\n"
          "one that is not a valid index raises meshsearch.IndexError. A list or\n"
          "tuple of integers is converted first. Anything that is not integers\n"
          "raises TypeError; anything that is not one-dimensional raises\n"
@@ -851,10 +875,15 @@ NB_MODULE(meshsearch, m)
            return indexArray(self.closeObjects(x, y, z, rmax, rmin));
          },
          "x"_a, "y"_a, "z"_a, "rmax"_a, "rmin"_a = 0.,
-         "Objects at distance d from a point, with rmin <= d <= rmax, in\n"
-         "unspecified order. The interval is closed at both ends, so an object\n"
-         "at exactly either radius is returned. An object lying on the point\n"
-         "is at d = 0 and is returned.")
+         "Objects at distance d from a point, with rmin <= d <= rmax, as a\n"
+         "uint32 array whose order is not meaningful. The interval is closed at\n"
+         "both ends, so an object at exactly either radius is returned, and\n"
+         "rmin == rmax selects the objects at exactly that distance. rmax may be\n"
+         "+inf. A ball reaching past the box is cut off at its faces, except\n"
+         "along a periodic axis, where it wraps. An object lying on the point\n"
+         "is at d = 0 and is returned.\n\n"
+         "Raises meshsearch.Error if the point is outside the box, if a radius\n"
+         "is negative or NaN, or if rmin exceeds rmax.")
 
     .def("close_objects",
          [](const meshsearch::MeshGrid& self, const ScalarArg& index,
@@ -862,10 +891,14 @@ NB_MODULE(meshsearch, m)
            return indexArray(self.closeObjects(scalarIndex(index), rmax, rmin));
          },
          "index"_a, "rmax"_a, "rmin"_a = 0.,
-         "Objects at distance d from an object, with rmin <= d <= rmax, in\n"
-         "unspecified order. The query object is excluded by identity, not by\n"
+         "Objects at distance d from an object, with rmin <= d <= rmax, as a\n"
+         "uint32 array whose order is not meaningful; the interval is the\n"
+         "point form's. The query object is excluded by identity, not by\n"
          "distance: another object coincident with it is at d = 0 and is\n"
-         "returned. A negative index raises meshsearch.IndexError.")
+         "returned.\n\n"
+         "Raises meshsearch.IndexError if index is negative, out of range or\n"
+         "removed; meshsearch.Error if a radius is negative or NaN, or if rmin\n"
+         "exceeds rmax; TypeError if index is not an integer.")
 
     .def("close_objects",
          [](const meshsearch::MeshGrid& self, const BatchArg& x, const nb::object& y, const nb::object& z,
@@ -884,7 +917,7 @@ NB_MODULE(meshsearch, m)
          },
          "x"_a, "y"_a, "z"_a, "rmax"_a, "rmin"_a = 0.,
          "Objects at distance d from each of an array of points, with\n"
-         "rmin <= d <= rmax, as a tuple (indices, offsets) in compressed-row\n"
+         "rmin <= d <= rmax, as a meshsearch.Batch (indices, offsets) in compressed-row\n"
          "form: the results of query i are indices[offsets[i]:offsets[i+1]],\n"
          "in the order the single call returns them. indices is uint32 and\n"
          "offsets int64; offsets has n_query + 1 entries, starts at 0 and\n"
@@ -919,7 +952,7 @@ NB_MODULE(meshsearch, m)
          "indices"_a, "rmax"_a, "rmin"_a = 0.,
          "Objects at distance d from each object of an array of indices, with\n"
          "rmin <= d <= rmax, each object excluded from its own answer, as a\n"
-         "tuple (indices, offsets) in compressed-row form: the results of\n"
+         "meshsearch.Batch (indices, offsets) in compressed-row form: the results of\n"
          "query i are indices[offsets[i]:offsets[i+1]], in the order the\n"
          "single call returns them. indices is uint32 and offsets int64;\n"
          "offsets has n_query + 1 entries, starts at 0 and ends at\n"
@@ -928,7 +961,7 @@ NB_MODULE(meshsearch, m)
          "\n"
          "indices is a 1-D array-like of integers, such as the uint32 arrays the\n"
          "queries return. An array of any integer dtype is read as it is,\n"
-         "without a copy, and values are never wrapped: a negative value or\n"
+         "never cast, so values are never wrapped: a negative value or\n"
          "one that is not a valid index raises meshsearch.IndexError. A list or\n"
          "tuple of integers is converted first. Anything that is not integers\n"
          "raises TypeError; anything that is not one-dimensional raises\n"
@@ -950,7 +983,10 @@ NB_MODULE(meshsearch, m)
          nb::overload_cast<double, double, double, double, double>(&meshsearch::MeshGrid::countObjects, nb::const_),
          "x"_a, "y"_a, "z"_a, "rmax"_a, "rmin"_a = 0.,
          "Number of objects close_objects would return for a point, counted\n"
-         "without collecting them.")
+         "without collecting them, as an int.\n\n"
+         "Raises meshsearch.Error as close_objects does: if the point is\n"
+         "outside the box, if a radius is negative or NaN, or if rmin exceeds\n"
+         "rmax.")
 
     .def("count_objects",
          [](const meshsearch::MeshGrid& self, const ScalarArg& index, const double rmax, const double rmin) {
@@ -958,8 +994,10 @@ NB_MODULE(meshsearch, m)
          },
          "index"_a, "rmax"_a, "rmin"_a = 0.,
          "Number of objects close_objects would return for an object, which\n"
-         "is excluded, counted without collecting them. A negative index raises\n"
-         "meshsearch.IndexError.")
+         "is excluded, counted without collecting them, as an int.\n\n"
+         "Raises meshsearch.IndexError if index is negative, out of range or\n"
+         "removed; meshsearch.Error on the radii, as close_objects; TypeError\n"
+         "if index is not an integer.")
 
     .def("count_objects",
          [](const meshsearch::MeshGrid& self, const BatchArg& x, const nb::object& y, const nb::object& z,
@@ -1028,7 +1066,7 @@ NB_MODULE(meshsearch, m)
          "int64 array with one count per index, in order.\n\n"
          "indices is a 1-D array-like of integers, such as the uint32 arrays the\n"
          "queries return. An array of any integer dtype is read as it is,\n"
-         "without a copy, and values are never wrapped: a negative value or\n"
+         "never cast, so values are never wrapped: a negative value or\n"
          "one that is not a valid index raises meshsearch.IndexError. A list or\n"
          "tuple of integers is converted first. Anything that is not integers\n"
          "raises TypeError; anything that is not one-dimensional raises\n"
@@ -1051,29 +1089,40 @@ NB_MODULE(meshsearch, m)
          "call returns.")
 
     .def("get_cell", &meshsearch::MeshGrid::get_cell, "x"_a, "y"_a, "z"_a,
-         "Linear index of the cell containing a point.")
+         "Linear index of the cell containing a point: (ix * ny + iy) * nz + iz,\n"
+         "with (ix, iy, iz) from get_cell_coords and (nx, ny, nz) = n_cells.\n\n"
+         "Raises meshsearch.Error if the point is outside the box.")
 
     .def("get_cell_coords",
          [](const meshsearch::MeshGrid& self, const double x, const double y, const double z) {
            return triple(self.get_cellCoords(x, y, z));
          },
          "x"_a, "y"_a, "z"_a,
-         "Cell coordinates (ix, iy, iz) of the cell containing a point.")
+         "Cell coordinates (ix, iy, iz) of the cell containing a point.\n\n"
+         "Raises meshsearch.Error if the point is outside the box.")
 
     .def("get_objects_in_cell",
          [](const meshsearch::MeshGrid& self, const double x, const double y, const double z) {
            return indexArray(self.get_objectsInCell(x, y, z));
          },
          "x"_a, "y"_a, "z"_a,
-         "Objects in the cell containing a point.")
+         "Objects in the cell containing a point, as a uint32 array.\n\n"
+         "Raises meshsearch.Error if the point is outside the box.")
 
     .def("remove_object",
          [](meshsearch::MeshGrid& self, const nb::object& index) { self.removeObject(scalarIndex(index)); },
          "index"_a,
-         "Remove an object. Its index stays invalid for the life of the grid.\n\n"
+         "Remove an object. Its index stays invalid for the life of the grid,\n"
+         "and its memory is not returned. Must not run while another thread\n"
+         "uses the grid.\n\n"
          "Raises meshsearch.IndexError if index is negative, out of range or\n"
-         "already removed.")
+         "already removed; TypeError if it is not an integer.")
 
     .def("add_object", &meshsearch::MeshGrid::addObject, "x"_a, "y"_a, "z"_a,
-         "Add an object and return its index, one past the highest ever issued.");
+         "Add an object and return its index, one past the highest ever issued.\n"
+         "The box is not refitted, and memory is not reclaimed: to add many\n"
+         "objects, build a new grid. Must not run while another thread uses\n"
+         "the grid.\n\n"
+         "Raises meshsearch.Error if the point is outside the box, or if\n"
+         "4294967295 indices have already been issued.");
 }

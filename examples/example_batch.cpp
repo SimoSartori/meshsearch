@@ -7,6 +7,7 @@
 
 #include "meshsearch/MeshGrid.h"
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -25,7 +26,12 @@ int main ()
     Y.push_back(unit(gen));
     Z.push_back(unit(gen));
   }
-  meshsearch::MeshGrid grid(X, Y, Z, 4./std::cbrt(double(n)));
+  // The limits are the unit cube, so that every query point in it is
+  // accepted. The cell side is two mean separations, where the mean
+  // separation of n points in a volume V is cbrt(V/n).
+  meshsearch::MeshGrid::Options options;
+  options.limits = std::array<std::array<double,2>,3>{{{0.,1.}, {0.,1.}, {0.,1.}}};
+  meshsearch::MeshGrid grid(X, Y, Z, 2.*std::cbrt(1./double(n)), options);
 
   std::vector<double> QX, QY, QZ;
   for (size_t i=0; i<50000; ++i) {
@@ -77,12 +83,16 @@ int main ()
   }
   printf("neighbours within %.2f of objects 0 to 999: %zu\n", radius, total);
 
-  // The same holds for batches, MeshGrid::Batch included.
+  // The batch forms take a container in the same way: here a vector of
+  // counts and a MeshGrid::Batch, each reused for three radii.
   std::vector<std::uint64_t> tally;
+  meshsearch::MeshGrid::Batch rings;
   std::vector<std::uint64_t> totals;
   for (const double r : {0.01, 0.02, 0.04}) {
     grid.countObjects(QX, QY, QZ, r, tally);
+    grid.closeObjects(QX, QY, QZ, r, rings);
     totals.push_back(std::accumulate(tally.begin(), tally.end(), std::uint64_t(0)));
+    if (rings.indices.size() != totals.back()) return 1;
   }
   printf("neighbours over all queries within 0.01, 0.02, 0.04: %llu %llu %llu\n",
          (unsigned long long)totals[0], (unsigned long long)totals[1], (unsigned long long)totals[2]);

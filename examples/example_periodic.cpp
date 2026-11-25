@@ -33,16 +33,18 @@ int main ()
   X.push_back(0.998); Y.push_back(0.5); Z.push_back(0.5);
 
   // A periodic axis needs its limits: they are the box, and the period is
-  // hi-lo. The flags are per axis, so a slab periodic in x and y only would be
+  // hi-lo. Coordinates are not wrapped, so every point must already lie
+  // within them. The periods must be whole multiples of the shortest one. The
+  // flags are per axis, so a slab periodic in x and y only would be
   // {true, true, false}.
-  const double cellsize = 4./std::cbrt(double(n));
+  const double cellsize = 2.*std::cbrt(1./double(n));
   meshsearch::MeshGrid::Options options;
   options.limits = std::array<std::array<double,2>,3>{{{0.,1.}, {0.,1.}, {0.,1.}}};
   options.periodic = {true, true, true};
   meshsearch::MeshGrid grid(X, Y, Z, cellsize, options);
 
-  // Every cell has the same side, which divides the period exactly. It can be
-  // a little smaller than the cellsize asked for, so read it back.
+  // The cell side used is the largest that fits a whole number of times into
+  // the shortest period without exceeding the one asked for, so read it back.
   printf("cellsize asked %.6f, used %.6f, %ux%ux%u cells\n",
          cellsize, grid.get_cellsize(),
          grid.get_nCells()[0], grid.get_nCells()[1], grid.get_nCells()[2]);
