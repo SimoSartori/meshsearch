@@ -24,8 +24,8 @@ pip install meshsearch
 
 Wheels are published for Linux (x86_64 and aarch64) and macOS (arm64 and
 x86_64); elsewhere pip builds the module from source, which needs CMake 3.16
-or later and a C++17 compiler. The module also runs on free-threaded CPython
-(3.14t) without re-enabling the GIL.
+or later and a C++17 compiler. The wheels include free-threaded CPython 3.14t, where the module runs
+without re-enabling the GIL.
 
 **C++**, with CMake 3.16 or later. Build and install the library:
 

@@ -43,7 +43,7 @@ int main ()
   // A batch takes the query points as three vectors, and has the name of the
   // single query: vectors in place of numbers select it. Results come back in
   // query order. A batch is faster than the same queries asked one by one in
-  // a loop, and one of 10^5 query points or more is answered internally in an
+  // a loop, and a large one is answered internally in an
   // order that follows the cells, which is faster again.
   const std::vector<unsigned int> nearest = grid.nearestObject(QX, QY, QZ);
   printf("nearest object to query 0: %u\n", nearest[0]);

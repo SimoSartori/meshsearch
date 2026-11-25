@@ -4,7 +4,7 @@ meshsearch is a C++17 library, with Python bindings, for exact neighbour
 searches in three-dimensional point sets. It is faster than the tree
 structures usually employed for the task: on ten million points it builds its
 index two to three and a half times faster than scipy's `cKDTree`, matches or
-outperforms it on batched queries, and runs fixed-radius searches on clustered
+outperforms it on batched queries with a suitable cell side, and runs fixed-radius searches on clustered
 data several times faster.
 
 It achieves this with a cell list, a uniform mesh of cubic cells over the
