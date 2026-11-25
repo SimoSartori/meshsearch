@@ -21,8 +21,12 @@ The *mean separation* of *N* points in a volume *V* is the cube root of
 Both scripts generate their own points in the unit cube, from a fixed seed:
 `uniform`, or `clustered`, a Thomas process with nine tenths of the points in
 clusters of about 1000 (the docstring of `benchmark.py` gives the
-parameters). Query points come from the same distribution: 1000 of them,
-timed as the median of three runs. Each row runs in a process of its own, so
+parameters). Query points come from the same distribution. `benchmark.py`
+draws 10,000 new query points for each of three runs, the same draws for every
+library, and reports the median, so no run finds what it visits already in
+cache from the one before; `--queries repeat` runs the same 1000 points three
+times instead. `benchmark_cellsize.py` runs the same 1000 points three times.
+Each row runs in a process of its own, so
 that the memory figure, the growth of the process's resident size during the
 build, belongs to one structure. Every meshsearch grid is built with the unit
 cube as its limits.
@@ -57,12 +61,14 @@ python benchmarks/benchmark_cellsize.py --sweep --dists clustered
 | `--periodic` | `benchmark.py` | all three axes periodic; `BallTree` is left out |
 | `--large-batch` | `benchmark.py` | one call of 10⁵ and of 10⁶ uniform query points, at each of `--factors` |
 | `--reps R` | `benchmark.py` | repetitions of each large batch (default 3) |
+| `--queries fresh\|repeat` | `benchmark.py` | new query points for every run (default), or the same ones |
 | `--sweep` | `benchmark_cellsize.py` | every size (10⁶, 10⁷), cell side and input |
 | `--one LIBRARY N`, `--one-sweep N F` | each | a single row, as JSON; what the scripts run in each subprocess |
 
 Each script prints its rows as JSON on standard output and its progress on
-standard error. On an Apple M1 Pro the full set took about a quarter of an
-hour, most of it building the ten-million-point structures.
+standard error. On an Apple M1 Pro the comparison, periodic and large-batch
+runs took 17 minutes together, most of it in `BallTree`'s per-call radius
+queries at ten million points.
 
 The scripts measure the two generated inputs only. To choose a cell side for
 your own points, repeat what `benchmark_cellsize.py` does on them: build grids

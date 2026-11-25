@@ -73,8 +73,9 @@ the unit cube, *s* = 0.01.
 **On uniform data, start at two mean separations.** The batched sweep on the
 [performance page](benchmark.md#cell-side) measures, for uniform points:
 
-- the nearest object is fastest at one mean separation, and becomes four to
-  eight times slower at four;
+- the nearest object is fastest at one mean separation, and becomes about
+  three times slower at four with fresh query points (four to eight times
+  when the queries' cells are already in cache);
 - the ten nearest are fastest at two;
 - a ball of radius two mean separations is fastest at three, and about five
   times slower at one;
@@ -86,6 +87,13 @@ separation for nearest-object queries, which also uses two to three times the
 memory, or three to four for balls of about two mean separations. For a ball
 or shell, the work grows with the radius measured in cells, so a radius much
 larger than the cell side calls for a larger cell.
+
+For radius queries, a cell side of 1 to 1.5 times the largest radius *R*max
+was within 5 per cent of the best side on uniform data and on both clustered
+sets measured: the one of the performance page, and one with clusters half as
+wide. This was measured for one radius only, *R*max of two mean separations,
+on a million points, batched, with 10,000 fresh query points per run; it is a
+measured fact, not a rule for other radii.
 
 **On clustered data the best side is different, and has been measured for one
 kind of clustering only.** The performance page uses a set with nine tenths of
@@ -215,10 +223,11 @@ cells, so that consecutive queries read neighbouring memory, and its results
 are then put back into input order; nothing of this is visible in the result.
 
 **A batch is faster than a loop.** In Python a single call costs about as much
-as a fast query itself: a nearest-object query takes about 1 µs per call and
-about 0.5 µs per query in a batch, at one mean separation and a million
-objects. A large batch also gains from its cell order: 1.5 to 2.4 times at one
-mean separation, measured from Python. The [performance page](benchmark.md#per-call-or-batched) has the
+as a fast query itself: with fresh query points in random order, a
+nearest-object query takes about 1.7 µs per call and about 1 µs per query in a
+batch, at one mean separation and a million objects. A large batch also gains
+from its cell order: 1.6 to 2.6 times at one mean separation, measured from
+Python, down to about 0.5 µs for the nearest object. The [performance page](benchmark.md#per-call-or-batched) has the
 figures.
 
 **The shape of the result.** `nearestObject` returns one index per query and
