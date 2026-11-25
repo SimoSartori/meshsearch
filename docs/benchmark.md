@@ -322,7 +322,7 @@ kind, and 5.6 to 7.1 times on the radius query at four.
 
 ## Cell side
 
-Batched query times at four cell sides, with how the objects fill the cells:
+Batched query times at six cell sides, with how the objects fill the cells:
 the share of cells left empty, the mean count in the cells that are not, and
 the 99th percentile of the count over all cells. The radius stays 2 *s*, so
 every row answers the same question. The queries are drawn as for the other
@@ -333,72 +333,95 @@ it was run five times and each figure is the median of the five.
 
 | cell side | cells | objects per cell | empty cells | per non-empty cell | 99th percentile | construction (seconds) | memory (MiB) | nearest | k = 10 | radius |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 *s* | 1,000,000 | 1.0 | 36.8 % | 1.6 | 4 | 0.192 | 216 | 0.98 | 3.89 | 7.03 |
-| 2 *s* | 125,000 | 8.0 | 0.0 % | 8.0 | 15 | 0.144 | 101 | 0.90 | 2.23 | 2.38 |
-| 3 *s* | 39,304 | 25.4 | 0.0 % | 25.4 | 39 | 0.137 | 88 | 1.45 | 2.78 | 1.57 |
-| 4 *s* | 15,625 | 64.0 | 0.0 % | 64.0 | 83 | 0.136 | 92 | 2.55 | 3.52 | 1.64 |
+| 1 *s* | 1,000,000 | 1.0 | 36.8 % | 1.6 | 4 | 0.198 | 218 | 0.95 | 3.67 | 6.68 |
+| 1.5 *s* | 300,763 | 3.3 | 3.7 % | 3.5 | 8 | 0.160 | 132 | 0.80 | 2.01 | 2.72 |
+| 2 *s* | 125,000 | 8.0 | 0.0 % | 8.0 | 15 | 0.146 | 109 | 1.02 | 2.17 | 2.27 |
+| 2.5 *s* | 64,000 | 15.6 | 0.0 % | 15.6 | 25 | 0.145 | 100 | 1.16 | 2.49 | 1.57 |
+| 3 *s* | 39,304 | 25.4 | 0.0 % | 25.4 | 39 | 0.140 | 97 | 1.46 | 2.85 | 1.55 |
+| 4 *s* | 15,625 | 64.0 | 0.0 % | 64.0 | 83 | 0.136 | 92 | 2.61 | 3.56 | 1.63 |
 
 ### Uniform, ten million points
 
 | cell side | cells | objects per cell | empty cells | per non-empty cell | 99th percentile | construction (seconds) | memory (MiB) | nearest | k = 10 | radius |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 *s* | 10,077,696 | 1.0 | 37.1 % | 1.6 | 4 | 2.300 | 2,165 | 1.30 | 5.42 | 10.27 |
-| 2 *s* | 1,259,712 | 7.9 | 0.0 % | 7.9 | 15 | 1.704 | 850 | 1.70 | 3.69 | 4.42 |
-| 3 *s* | 373,248 | 26.8 | 0.0 % | 26.8 | 40 | 1.530 | 719 | 2.15 | 4.25 | 2.56 |
-| 4 *s* | 157,464 | 63.5 | 0.0 % | 63.5 | 83 | 1.451 | 697 | 3.34 | 5.02 | 2.51 |
+| 1 *s* | 10,077,696 | 1.0 | 37.1 % | 1.6 | 4 | 2.242 | 2,210 | 1.21 | 4.91 | 9.20 |
+| 1.5 *s* | 2,985,984 | 3.3 | 3.5 % | 3.5 | 8 | 1.819 | 1,133 | 1.32 | 3.17 | 4.43 |
+| 2 *s* | 1,259,712 | 7.9 | 0.0 % | 7.9 | 15 | 1.665 | 849 | 1.52 | 3.34 | 3.95 |
+| 2.5 *s* | 658,503 | 15.2 | 0.0 % | 15.2 | 25 | 1.590 | 769 | 1.77 | 3.62 | 2.59 |
+| 3 *s* | 373,248 | 26.8 | 0.0 % | 26.8 | 40 | 1.547 | 733 | 2.06 | 3.95 | 2.39 |
+| 4 *s* | 157,464 | 63.5 | 0.0 % | 63.5 | 83 | 1.463 | 696 | 3.15 | 4.66 | 2.27 |
 
 ### Clustered, a million points
 
 | cell side | cells | objects per cell | empty cells | per non-empty cell | 99th percentile | construction (seconds) | memory (MiB) | nearest | k = 10 | radius |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 *s* | 1,000,000 | 1.0 | 80.1 % | 5.0 | 24 | 0.186 | 221 | 1.20 | 2.79 | 8.62 |
-| 2 *s* | 125,000 | 8.0 | 34.7 % | 12.3 | 167 | 0.140 | 98 | 2.18 | 3.00 | 5.71 |
-| 3 *s* | 39,304 | 25.4 | 5.7 % | 27.0 | 414 | 0.136 | 89 | 3.17 | 3.38 | 5.00 |
-| 4 *s* | 15,625 | 64.0 | 0.1 % | 64.0 | 749 | 0.136 | 77 | 4.70 | 4.03 | 5.41 |
+| 1 *s* | 1,000,000 | 1.0 | 80.1 % | 5.0 | 24 | 0.185 | 215 | 1.18 | 2.63 | 8.43 |
+| 1.5 *s* | 300,763 | 3.3 | 59.5 % | 8.2 | 75 | 0.147 | 120 | 1.69 | 2.85 | 5.78 |
+| 2 *s* | 125,000 | 8.0 | 34.7 % | 12.3 | 167 | 0.140 | 92 | 2.20 | 3.04 | 5.65 |
+| 2.5 *s* | 64,000 | 15.6 | 14.9 % | 18.4 | 288 | 0.137 | 85 | 2.79 | 3.16 | 4.83 |
+| 3 *s* | 39,304 | 25.4 | 5.7 % | 27.0 | 414 | 0.137 | 89 | 3.33 | 3.44 | 5.09 |
+| 4 *s* | 15,625 | 64.0 | 0.1 % | 64.0 | 749 | 0.134 | 97 | 4.80 | 4.09 | 5.47 |
 
 ### Clustered, ten million points
 
 | cell side | cells | objects per cell | empty cells | per non-empty cell | 99th percentile | construction (seconds) | memory (MiB) | nearest | k = 10 | radius |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 *s* | 10,077,696 | 1.0 | 80.2 % | 5.0 | 24 | 2.198 | 2,181 | 1.85 | 3.83 | 11.90 |
-| 2 *s* | 1,259,712 | 7.9 | 34.9 % | 12.2 | 165 | 1.597 | 737 | 3.06 | 4.40 | 7.65 |
-| 3 *s* | 373,248 | 26.8 | 4.4 % | 28.0 | 434 | 1.447 | 610 | 4.02 | 4.69 | 5.95 |
-| 4 *s* | 157,464 | 63.5 | 0.1 % | 63.6 | 730 | 1.386 | 578 | 5.49 | 5.47 | 6.20 |
+| 1 *s* | 10,077,696 | 1.0 | 80.2 % | 5.0 | 24 | 2.168 | 2,068 | 1.68 | 3.50 | 10.86 |
+| 1.5 *s* | 2,985,984 | 3.3 | 59.3 % | 8.2 | 76 | 1.718 | 1,035 | 2.26 | 3.87 | 7.86 |
+| 2 *s* | 1,259,712 | 7.9 | 34.9 % | 12.2 | 165 | 1.581 | 736 | 2.85 | 4.24 | 7.67 |
+| 2.5 *s* | 658,503 | 15.2 | 15.9 % | 18.1 | 284 | 1.507 | 651 | 3.39 | 4.38 | 5.94 |
+| 3 *s* | 373,248 | 26.8 | 4.4 % | 28.0 | 434 | 1.451 | 605 | 3.97 | 4.58 | 5.92 |
+| 4 *s* | 157,464 | 63.5 | 0.1 % | 63.6 | 730 | 1.399 | 580 | 5.39 | 5.22 | 6.18 |
 
-On uniform data the nearest object is fastest at one to two mean separations
-(level at a million points, one ahead by about 30 per cent at ten million),
-and 2.6 times slower at four than at one. The ten nearest are fastest at two.
-The radius query is fastest at three, level with four at ten million points,
-and four to four and a half times slower at one. On the clustered set the
-nearest and the ten nearest are fastest at one, where four fifths of the cells
-are empty, and slow down as the cells grow: at four, one cell in a hundred
-holds over ten times the average, and the nearest object is three to four
-times slower than at one. The radius query is fastest at three.
+On uniform data the nearest object is fastest at one to one and a half mean
+separations (one and a half ahead by about 15 per cent at a million points,
+one ahead by about 9 per cent at ten million), and 2.6 to 2.7 times slower at
+four than at one. The ten nearest are fastest at one and a half, with two
+within 8 per cent. The radius query is fastest at two and a half to four: at
+a million points the three lie within 5 per cent of each other; at ten
+million four is fastest, three 5 per cent and two and a half 14 per cent
+slower. It is about four times slower at one. On the clustered set the
+nearest and the ten nearest are fastest at one, where four fifths of the
+cells are empty, and slow down as the cells grow: at four, one cell in a
+hundred holds over ten times the average, and the nearest object is three to
+four times slower than at one. The radius query is fastest at two and a half
+to three (level at ten million points, two and a half ahead by 5 per cent at
+a million).
 
 At two mean separations the cell side equals the radius, and that is a step:
 a ball whose radius is at least the cell side costs more than one just under
 it. On a million uniform points, in a separate measurement (median of five
 runs of 10,000 fresh queries), the radius query took 2.27 µs at a cell side
-of exactly 2 *s* and 1.55 µs at 2.02 *s*; at 3 *s* it took 1.50.
+of exactly 2 *s* and 1.55 µs at 2.02 *s*; at 3 *s* it took 1.50. The half
+steps in the tables show the same step: with larger cells, the radius query
+at 2.5 *s* is 1.2 to 1.5 times faster than at 2 *s*.
 
 ## Memory
 
-A grid keeps 37 bytes per object (the coordinates, 24, and the bookkeeping
-that maps indices to storage, 13) and at least 112 bytes per cell (16 for the
-cell, and 96 for its eight entries in a table of cell offsets; about a quarter
-of that on a grid periodic along all three axes). At ten million uniform points
-and four mean separations that is 353 MiB for the objects and about 17 MiB for
-the 157,464 cells. The build needs, besides, a temporary cell index of 8 bytes
-per object, and from Python a copy of the three coordinate arrays, 24 bytes per
-object; both are freed when the grid is built, but the allocator kept them in
-the process, which is why the table above reports about 700 MiB for that grid.
-A C++ program building the same grid grew by 455 MiB. The grid is built
-compact, with no room reserved for later additions.
+What a grid allocates is fixed by the number of objects and of cells. It
+keeps 37 bytes per object (the coordinates, 24, and the bookkeeping that maps
+indices to storage, 13) and, on a grid with no periodic axis, at least 112
+bytes per cell (16 for the cell, and 96 for its eight entries in a table of
+cell offsets); a grid periodic along all three axes needs about 28 bytes per
+cell. At ten million points and one mean separation, with 10,077,696 cells,
+that is 353 MiB for the objects and at least 1,076 MiB for the cells, about
+1.4 GiB. At four mean separations the 157,464 cells take about 17 MiB beside
+the same 353 MiB.
 
-At one mean separation there are as many cells as objects, so the cells cost
-more than the objects; at ten million points the measured growth varied
-between identical runs from 1.0 to 2.1 GiB, on either data set. The
-four-mean-separation figures repeated within 2 per cent.
+The build needs more while it runs: a temporary cell index of 8 bytes per
+object, 76 MiB at ten million, and from Python a copy of the three coordinate
+arrays, 24 bytes per object, 229 MiB. Both are freed when the grid is built,
+but the allocator may keep them in the process, which is why the tables report
+about 700 MiB for the ten-million-point grid at four mean separations; a C++
+program building the same grid grew by 455 MiB. The grid is built compact,
+with no room reserved for later additions.
+
+The tables report how much the process's resident size grew, which is not the
+same as what was allocated, and it varies between runs. At four mean
+separations it repeated within 2 per cent. At one mean separation and ten
+million points, identical runs grew by 1.0 to 2.3 GiB, on either data set:
+in some runs less than the 1.4 GiB the grid allocates, in others well above
+it.
 
 ## Not measured
 
