@@ -1,7 +1,7 @@
 """A periodic box with meshsearch: neighbours are found across the faces of the
 box, as if it repeated forever in every direction.
 
-    pip install .
+    pip install meshsearch
     python examples/example_periodic.py
 """
 
@@ -21,15 +21,16 @@ y = np.append(y, [0.5, 0.5])
 z = np.append(z, [0.5, 0.5])
 
 # A periodic axis needs its limits: they are the box, and the period is hi-lo.
-# periodic is a bool for all three axes or one bool per axis, so a slab
-# periodic in x and y only would be periodic=(True, True, False). Both are
-# keyword-only.
-cellsize = 4 * n ** (-1 / 3)
+# Coordinates are not wrapped, so every point must already lie within them.
+# The periods must be whole multiples of the shortest one. periodic is a bool
+# for all three axes or one bool per axis, so a slab periodic in x and y only
+# would be periodic=(True, True, False). Both are keyword-only.
+cellsize = 2 * (1.0 / n) ** (1 / 3)
 grid = meshsearch.MeshGrid(x, y, z, cellsize,
                            limits=[[0, 1], [0, 1], [0, 1]], periodic=True)
 
-# Every cell has the same side, which divides the period exactly. It can be a
-# little smaller than the cellsize asked for, so read it back.
+# The cell side used is the largest that fits a whole number of times into
+# the shortest period without exceeding the one asked for, so read it back.
 print(f"periodic {grid.periodic}, cellsize asked {cellsize:.6f}, "
       f"used {grid.cellsize:.6f}, {'x'.join(str(c) for c in grid.n_cells)} cells")
 

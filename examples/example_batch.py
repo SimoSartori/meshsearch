@@ -6,7 +6,7 @@ array of query points across once, and a large batch is answered in an order
 that follows the grid's cells, which is faster again. Results always come back
 in query order.
 
-    pip install .
+    pip install meshsearch
     python examples/example_batch.py
 """
 
@@ -14,11 +14,15 @@ import numpy as np
 
 import meshsearch
 
-# The grid, and a set of query points to ask about.
+# The grid, over points in the unit cube, and a set of query points to ask
+# about. The limits are the unit cube, so that every query point in it is
+# accepted. The cell side is two mean separations, where the mean separation
+# of n_objects points in a volume V is (V / n_objects) ** (1/3).
 rng = np.random.default_rng(7)
-n = 200_000
-x, y, z = rng.random(n), rng.random(n), rng.random(n)
-grid = meshsearch.MeshGrid(x, y, z, 4 * n ** (-1 / 3), limits=[[0.0, 1.0]] * 3)
+n_objects = 200_000
+x, y, z = rng.random(n_objects), rng.random(n_objects), rng.random(n_objects)
+separation = (1.0 / n_objects) ** (1 / 3)
+grid = meshsearch.MeshGrid(x, y, z, 2 * separation, limits=[[0.0, 1.0]] * 3)
 
 # Query points go in as three arrays, the same shape as the constructor takes.
 # Any array-like will do: a float64 or integer array is read as it is, without
@@ -41,11 +45,11 @@ separation = np.sqrt((x[nearest] - qx) ** 2 + (y[nearest] - qy) ** 2
 print(f"  mean distance to the nearest object: {separation.mean():.5f}")
 
 # 2. The five nearest to each query point, nearest first. This one is
-#    rectangular -- every query returns exactly n -- so it comes back as a
-#    single (n_query, n) array and needs no offsets.
+#    rectangular -- every query returns exactly five -- so it comes back as a
+#    single (n_query, 5) array and needs no offsets.
 five = grid.nearest_objects(5, qx, qy, qz)
 print(f"nearest_objects -> {five.dtype} {five.shape}")
-print(f"  the fifth-nearest is further than the first for every query: "
+print(f"  the fifth-nearest is at least as far as the first for every query: "
       f"{bool(np.all(np.sqrt((x[five[:, 4]] - qx) ** 2 + (y[five[:, 4]] - qy) ** 2 + (z[five[:, 4]] - qz) ** 2) >= separation))}")
 
 # 3. Only the number of objects within a radius of each query point. No index
@@ -101,15 +105,16 @@ print(f"  and the shell holds them all: "
 
 # The same trick answers questions that span queries. Which object turns up as
 # a neighbour most often across the whole batch?
-busiest = np.bincount(indices, minlength=n).argmax()
+busiest = np.bincount(indices, minlength=n_objects).argmax()
 print(f"  object {busiest} is a neighbour of "
       f"{int(np.sum(indices == busiest))} different queries")
 
 # Repeated batches of the same shape can write into one array instead of
 # allocating a new one each time: pass it as out=, and the call fills it and
 # returns it. The array must already be exactly the result -- uint32 of shape
-# (n_query,) for nearest_object, uint32 of shape (n_query, n) for
-# nearest_objects, int64 of shape (n_query,) for count_objects, C-contiguous -- or the call raises; it is never converted.
+# (n_query,) for nearest_object, uint32 of shape (n_query, k) for
+# nearest_objects with k neighbours, int64 of shape (n_query,) for
+# count_objects, C-contiguous -- or the call raises; it is never converted.
 # close_objects has no out=, because its length is only known afterwards.
 neighbours = np.empty((len(qx), 5), dtype=np.uint32)
 tally = np.empty(len(qx), dtype=np.int64)
@@ -156,5 +161,5 @@ accepted = grid.contains(bad_x, qy, qz)
 print(f"\n{accepted.sum()} of {len(accepted)} query points lie in the box; "
       f"query 99 does not: {not accepted[99]}")
 assert accepted.sum() == len(qx) - 1 and not accepted[99]
-alive = grid.is_alive(np.array([0, 1, n - 1, n, -1]))
+alive = grid.is_alive(np.array([0, 1, n_objects - 1, n_objects, -1]))
 assert alive.tolist() == [True, True, True, False, False]

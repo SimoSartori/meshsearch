@@ -1,73 +1,64 @@
 # Names side by side
 
 The same members, spelled for each language. C++ uses the names the header
-declares; Python uses snake_case, turns the three accessors into properties,
-and returns numpy arrays where C++ returns vectors.
+declares; Python uses snake_case, makes the four accessors `periodic`, `lims`,
+`n_cells` and `cellsize` read-only properties, gives the object count as
+`len(grid)`, and returns numpy arrays where C++ returns vectors. Each member
+is documented in the [C++ reference](cpp.rst) and the
+[Python reference](python.rst).
 
-| C++ | Python | notes |
+In the table, `X, Y, Z` are the coordinates of one point and `QX, QY, QZ` the
+coordinate arrays of a batch of query points; `index` is one object index and
+`indices` an array of them.
+
+| C++ | Python | what it is |
 |---|---|---|
-| `MeshGrid(X, Y, Z, cellsize, options)` | `MeshGrid(x, y, z, cellsize, *, limits=None, periodic=False)` | C++ passes `limits` and `periodic` in a `MeshGrid::Options`; Python takes them as keywords |
-| `get_periodic()` | `grid.periodic` | property; a tuple of three bools in Python |
-| `get_nObjects()` | `len(grid)` | live objects, removals excluded |
-| `isAlive(index)` | `is_alive(index)` | the one member taking an index that does not raise: false for a negative or out-of-range index |
-| `isAlive(indices)` | `is_alive(indices, *, out=None)` | one flag each: a `std::vector<std::uint8_t>` of 0 and 1 in C++, a `bool` array in Python |
-| `contains(X, Y, Z)` | `contains(x, y, z)` | true if the point lies in the box, the test every query applies |
-| `contains(QX, QY, QZ)` | `contains(qx, qy, qz, *, out=None)` | one flag each, as for `isAlive` |
-| `get_lims()` | `grid.lims` | property; `std::array<std::array<double,2>,3>` in C++, a 3×2 array in Python |
-| `get_nCells()` | `grid.n_cells` | property; a tuple in Python |
-| `get_cellsize()` | `grid.cellsize` | property |
-| `nearestObject(X, Y, Z)` | `nearest_object(x, y, z)` | |
-| `nearestObject(index)` | `nearest_object(index)` | the object itself excluded |
-| `nearestObjects(N, X, Y, Z)` | `nearest_objects(n, x, y, z)` | |
-| `nearestObjects(N, index)` | `nearest_objects(n, index)` | |
-| `closeObjects(X, Y, Z, Rmax, Rmin)` | `close_objects(x, y, z, rmax, rmin)` | `Rmin` defaults to 0 |
-| `closeObjects(index, Rmax, Rmin)` | `close_objects(index, rmax, rmin)` | |
-| `countObjects(X, Y, Z, Rmax, Rmin)` | `count_objects(x, y, z, rmax, rmin)` | a `std::size_t`; an `int` in Python |
-| `countObjects(index, Rmax, Rmin)` | `count_objects(index, rmax, rmin)` | |
-| `nearestObject(QX, QY, QZ)` | `nearest_object(qx, qy, qz, *, out=None)` | batch: vectors in C++, numpy arrays in Python |
-| `nearestObjects(N, QX, QY, QZ)` | `nearest_objects(n, qx, qy, qz, *, out=None)` | `n*N` flat in C++; `(n_query, n)` in Python |
-| `closeObjects(QX, QY, QZ, Rmax, Rmin)` | `close_objects(qx, qy, qz, rmax, rmin)` | a `MeshGrid::Batch`; a `meshsearch.Batch` `(indices, offsets)` in Python, offsets `int64` |
-| `countObjects(QX, QY, QZ, Rmax, Rmin)` | `count_objects(qx, qy, qz, rmax, rmin, *, out=None)` | `std::vector<std::uint64_t>`; `int64` in Python |
-| `nearestObject(indices)` | `nearest_object(indices, *, out=None)` | batch over objects; Python takes any array-like of integers |
-| `nearestObjects(N, indices)` | `nearest_objects(n, indices, *, out=None)` | |
-| `closeObjects(indices, Rmax, Rmin)` | `close_objects(indices, rmax, rmin)` | |
-| `countObjects(indices, Rmax, Rmin)` | `count_objects(indices, rmax, rmin, *, out=None)` | |
-| `MeshGrid::Batch` | `meshsearch.Batch` | `indices` and `offsets`; a named tuple in Python, offsets `int64` |
-| `MESHSEARCH_VERSION` (`meshsearch/Version.h`) | `meshsearch.__version__` | both from the project version in `CMakeLists.txt` |
-| copy constructor, assignment | `copy.copy(grid)`, `copy.deepcopy(grid)` | deep and independent; answers every query as the original does |
+| `MeshGrid(X, Y, Z, cellsize)`, `MeshGrid(X, Y, Z, cellsize, options)` | `MeshGrid(x, y, z, cellsize, *, limits=None, periodic=False)` | C++ passes limits and periodic axes in a `MeshGrid::Options` |
+| `MeshGrid()` | — | an empty grid, to assign to later |
+| `get_nObjects()` | `len(grid)` | objects in the grid, removed ones excluded |
+| `get_lims()` | `grid.lims` | the box; a 3×2 array in Python |
+| `get_nCells()` | `grid.n_cells` | cells per axis; a tuple in Python |
+| `get_cellsize()` | `grid.cellsize` | the cell side used |
+| `get_periodic()` | `grid.periodic` | periodic flag per axis; a tuple in Python |
+| `isAlive(index)`, `isAlive(indices)` | `is_alive(index)`, `is_alive(indices, *, out=None)` | whether an index names an object in the grid |
+| `contains(X, Y, Z)`, `contains(QX, QY, QZ)` | `contains(x, y, z)`, `contains(qx, qy, qz, *, out=None)` | whether a point lies in the box |
+| `nearestObject(X, Y, Z)`, `nearestObject(index)` | `nearest_object(x, y, z)`, `nearest_object(index)` | the nearest object |
+| `nearestObject(QX, QY, QZ)`, `nearestObject(indices)` | `nearest_object(qx, qy, qz, *, out=None)`, `nearest_object(indices, *, out=None)` | its batches |
+| `nearestObjects(N, X, Y, Z)`, `nearestObjects(N, index)` | `nearest_objects(n, x, y, z)`, `nearest_objects(n, index)` | the *N* nearest |
+| `nearestObjects(N, QX, QY, QZ)`, `nearestObjects(N, indices)` | `nearest_objects(n, qx, qy, qz, *, out=None)`, `nearest_objects(n, indices, *, out=None)` | its batches: `n*N` flat in C++, `(n_query, n)` in Python |
+| `closeObjects(X, Y, Z, Rmax, Rmin)`, `closeObjects(index, Rmax, Rmin)` | `close_objects(x, y, z, rmax, rmin=0)`, `close_objects(index, rmax, rmin=0)` | every object in a ball or shell |
+| `closeObjects(QX, QY, QZ, Rmax, Rmin)`, `closeObjects(indices, Rmax, Rmin)` | `close_objects(qx, qy, qz, rmax, rmin=0)`, `close_objects(indices, rmax, rmin=0)` | its batches, returning a `Batch` |
+| `countObjects(X, Y, Z, Rmax, Rmin)`, `countObjects(index, Rmax, Rmin)` | `count_objects(x, y, z, rmax, rmin=0)`, `count_objects(index, rmax, rmin=0)` | how many `closeObjects` would return |
+| `countObjects(QX, QY, QZ, Rmax, Rmin)`, `countObjects(indices, Rmax, Rmin)` | `count_objects(qx, qy, qz, rmax, rmin=0, *, out=None)`, `count_objects(indices, rmax, rmin=0, *, out=None)` | its batches |
+| `MeshGrid::Batch` | `meshsearch.Batch` | `indices` and `offsets`; a named tuple in Python |
+| `get_cell(X, Y, Z)` | `get_cell(x, y, z)` | linear index of a point's cell |
+| `get_cellCoords(X, Y, Z)` | `get_cell_coords(x, y, z)` | coordinates of a point's cell |
+| `get_objectsInCell(X, Y, Z)` | `get_objects_in_cell(x, y, z)` | the objects in a point's cell |
+| `addObject(X, Y, Z)` | `add_object(x, y, z)` | add an object; returns its index |
+| `removeObject(index)` | `remove_object(index)` | remove an object |
+| copy constructor and assignment | `copy.copy(grid)`, `copy.deepcopy(grid)` | an independent copy |
+| move constructor and assignment | — | transfer a grid without copying |
 | — | `repr(grid)` | object count, cells, cell side and periodic axes |
-| `get_cell(X, Y, Z)` | `get_cell(x, y, z)` | |
-| `get_cellCoords(X, Y, Z)` | `get_cell_coords(x, y, z)` | |
-| `get_objectsInCell(X, Y, Z)` | `get_objects_in_cell(x, y, z)` | |
-| `addObject(X, Y, Z)` | `add_object(x, y, z)` | returns the new index |
-| `removeObject(index)` | `remove_object(index)` | |
-| `meshsearch::Error` | `meshsearch.Error` | derives from `ValueError` in Python |
-| `meshsearch::IndexError` | `meshsearch.IndexError` | derives from both `meshsearch.Error` and the built-in `IndexError` |
+| `MESHSEARCH_VERSION` in `meshsearch/Version.h` | `meshsearch.__version__` | the version built |
+| `meshsearch::Error` | `meshsearch.Error` | every error the grid raises; a `ValueError` in Python |
+| `meshsearch::IndexError` | `meshsearch.IndexError` | an index out of range or removed; also a built-in `IndexError` in Python |
+| `std::bad_alloc` | `MemoryError` | out of memory |
 
-## What exists on one side only
+## What differs
 
-**Container forms, C++ only.** Every C++ query that returns a container has an
-overload taking one as its last argument, which is cleared, filled, and keeps
-its capacity: `closeObjects(X, Y, Z, Rmax, Rmin, out)`,
-`nearestObjects(N, index, out)`, `countObjects(QX, QY, QZ, Rmax, out)` and so
-on. The [guide](guide.md#reusing-a-container-in-c) shows them in a loop.
+The results and the errors are the same in both languages; only their types
+differ.
 
-**`out=`, Python only.** The batched `nearest_object`, `nearest_objects`,
-`count_objects`, `contains` and `is_alive` take
-a keyword-only `out=`, an array to fill and return instead of allocating one.
-The [guide](guide.md#reusing-an-array-in-python) gives its rules.
-
-## Where the two behave differently
-
-Nowhere, deliberately. The Python module is a thin binding: same guarantees,
-same exceptions, same order of results, same closed interval `Rmin <= d <= Rmax`
-on `closeObjects` / `close_objects`. What differs is only the shape of what
-comes back — a numpy `uint32` array in place of a `std::vector<unsigned int>`,
-an `int64` array in place of a `std::vector<std::uint64_t>`, a named tuple
-in place of a `MeshGrid::Batch`, a `bool` array in place of a vector of
-`std::uint8_t` — and that the Python arrays own their
-data and are safe to keep after the grid is gone. A failed Python batch also
-names the query that failed in its message. A negative index or count, which
-the unsigned C++ types cannot express, is an error in Python: a negative index
-raises `meshsearch.IndexError` (and `is_alive` answers false), a negative `n`
-raises `meshsearch.Error`.
+- **Types.** Indices are a `std::vector<unsigned int>` in C++ and a `uint32`
+  array in Python; batch counts a `std::vector<std::uint64_t>` and an `int64`
+  array; flags a `std::vector<std::uint8_t>` of 0 and 1 and a `bool` array;
+  batch offsets `std::uint64_t` and `int64`. Python arrays own their data and
+  stay valid after the grid is gone.
+- **Reusing memory.** C++ queries that return a container (all but
+  `get_objectsInCell`) also have a form writing into one passed last; Python
+  batches with a result of known shape take `out=`. See the
+  [guide](guide.md#reusing-memory-between-calls).
+- **Negative numbers.** The unsigned C++ types cannot express them; in Python
+  a negative index raises `meshsearch.IndexError` (and `is_alive` answers
+  `False`), and a negative `n` raises `meshsearch.Error`.
+- **Messages.** A failed Python batch names the query that failed.

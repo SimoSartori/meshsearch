@@ -3,12 +3,14 @@ query kinds, swept over cell sides of one to four mean separations at two data
 sizes.
 
 The cell side is meshsearch's one tuning parameter. A fine grid holds few
-objects per cell and many cells; a coarse one the reverse, and the offset mask
-holds 8 entries per cell, so the cell count and the memory with it fall as the
-cube of the factor. The radius is held at twice the mean separation so that the
-answer stays the same size, about 33 neighbours, at every cell side.
+objects per cell and many cells; a coarse one the reverse, and every cell
+costs memory (its block, and eight entries per cell in the shared offset
+table), so the cell count and the memory with it fall as the cube of the
+factor. The radius is held at twice the mean separation so that the answer
+stays the same size at every cell side (about 33 neighbours on uniform data).
 
-The tables this produces are in docs/benchmark.md, which reads them.
+The tables on the documentation's performance page, docs/benchmark.md, were
+produced with this script.
 
     python benchmarks/benchmark_cellsize.py --sweep          # every size, cell side and input
     python benchmarks/benchmark_cellsize.py --sweep --dists clustered

@@ -7,6 +7,7 @@
 
 #include "meshsearch/MeshGrid.h"
 
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <random>
@@ -26,22 +27,21 @@ int main ()
     Z.push_back(unit(gen));
   }
 
-  // The cell side sets the cost of every query: too large and each cell holds
-  // many objects to test, too small and a query walks many cells. The mean
-  // separation is a reasonable starting point. Four time the mean separation 
-  // is optimal in most cases.
-  //
-  // Coordinates, cellsize and radii must share one unit. The library does not
-  // impose one, so whatever the points are in, the radii are in too.
-  const double cellsize = 4./std::cbrt(double(n));
+  // The box. Give the limits of the region the points and every later query
+  // point belong to, here the unit cube. Without limits the box is fitted to
+  // the points, and a query point outside their range raises Error.
+  meshsearch::MeshGrid::Options options;
+  options.limits = std::array<std::array<double,2>,3>{{{0.,1.}, {0.,1.}, {0.,1.}}};
 
-  // With no limits given, the box is fitted to the data and then grown
-  // symmetrically to a whole number of cells, so get_lims() can be slightly
-  // wider than the points. Pass limits explicitly to control it:
-  //   meshsearch::MeshGrid::Options options;
-  //   options.limits = std::array<std::array<double,2>,3>{{{0.,1.}, {0.,1.}, {0.,1.}}};
-  //   MeshGrid grid(X, Y, Z, cellsize, options);
-  meshsearch::MeshGrid grid(X, Y, Z, cellsize);
+  // The cell side, the one tuning parameter. The mean separation of n points
+  // in a volume V is cbrt(V/n); two mean separations is a starting value for
+  // uniform data, and the guide shows what other choices cost. Coordinates,
+  // cell side and radii share one unit, whatever it is.
+  const double volume = 1.;
+  const double separation = std::cbrt(volume/double(n));
+  const double cellsize = 2.*separation;
+
+  meshsearch::MeshGrid grid(X, Y, Z, cellsize, options);
 
   const auto lims = grid.get_lims();
   const auto nCells = grid.get_nCells();
@@ -50,36 +50,31 @@ int main ()
   printf("box x [%.4f, %.4f]  y [%.4f, %.4f]  z [%.4f, %.4f]\n\n",
          lims[0][0], lims[0][1], lims[1][0], lims[1][1], lims[2][0], lims[2][1]);
 
-  // 1. The object nearest a point.
   const unsigned int nearest = grid.nearestObject(0.5, 0.5, 0.5);
   printf("nearest to the box centre: object %u at (%.4f, %.4f, %.4f)\n",
          nearest, X[nearest], Y[nearest], Z[nearest]);
 
-  // 2. The N nearest, returned nearest first.
   const std::vector<unsigned int> ten = grid.nearestObjects(10, 0.5, 0.5, 0.5);
   printf("ten nearest to the centre:");
   for (const auto index : ten) printf(" %u", index);
   printf("\n");
 
-  // 3. Every object in a spherical shell, Rmin <= d <= Rmax, in no particular
-  //    order. Rmin defaults to 0, giving a ball. A shell reaching outside the
-  //    box is truncated rather than rejected.
+  // A shell is Rmin <= d <= Rmax, both ends included; with Rmin left out it
+  // is a ball. The order of the indices is not meaningful.
   const std::vector<unsigned int> shell = grid.closeObjects(0.5, 0.5, 0.5, 0.15, 0.10);
-  printf("objects between 0.10 and 0.15 of the centre: %zu\n", shell.size());
+  const size_t counted = grid.countObjects(0.5, 0.5, 0.5, 0.15, 0.10);
+  printf("objects between 0.10 and 0.15 of the centre: %zu (counted: %zu)\n", shell.size(), counted);
 
-  // Each query also has an overload taking an object already in the grid,
-  // which is then excluded from its own answer.
+  // Asked about an object in the grid, a query leaves that object out of its
+  // own answer.
   const std::vector<unsigned int> around = grid.nearestObjects(5, nearest);
   printf("five nearest to object %u:", nearest);
   for (const auto index : around) printf(" %u", index);
   printf("\n\n");
 
-  // Const members may be called concurrently on one grid. The two below may
-  // not, and must not run alongside a query.
-  //
-  // Indices are stable: removing an object leaves every other index valid and
-  // its own permanently invalid, and adding issues a fresh one. Indices are
-  // never reused, so a stored index never comes to mean a different object.
+  // Removing an object leaves its index permanently invalid; adding one
+  // issues a new index. No index is ever reused. Neither call may run while
+  // another thread uses the grid.
   grid.removeObject(nearest);
   printf("removed object %u: %u objects left, isAlive(%u) = %s\n",
          nearest, grid.get_nObjects(), nearest, grid.isAlive(nearest) ? "true" : "false");
@@ -89,10 +84,7 @@ int main ()
          added, grid.get_nObjects());
   printf("nearest to the centre is now object %u\n\n", grid.nearestObject(0.5, 0.5, 0.5));
 
-  // Errors are exceptions, never return codes. A point outside the box, a
-  // negative or NaN radius, or a count larger than the grid holds raises
-  // Error; naming an index that is out of range or removed raises IndexError,
-  // which derives from Error, so catching Error alone catches both.
+  // IndexError derives from Error, so catching Error alone catches both.
   try {
     grid.nearestObject(nearest);
   }
@@ -100,6 +92,9 @@ int main ()
     printf("querying the removed object raised IndexError: %s\n", e.what());
   }
 
+  // A point outside the box is an error, never a silent empty answer;
+  // contains() tells beforehand.
+  printf("contains(2, 2, 2) = %s\n", grid.contains(2., 2., 2.) ? "true" : "false");
   try {
     grid.closeObjects(2., 2., 2., 0.1);
   }
@@ -107,5 +102,5 @@ int main ()
     printf("querying a point outside the box raised Error: %s\n", e.what());
   }
 
-  return 0;
+  return shell.size() == counted && ten.size() == 10 ? 0 : 1;
 }

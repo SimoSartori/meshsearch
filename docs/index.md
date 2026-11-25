@@ -1,68 +1,41 @@
 # meshsearch
 
-A uniform cubic mesh over a set of points in three dimensions, for neighbour
-queries: the object nearest a point, the *N* nearest, and every object in a
-spherical shell. C++17 with no dependencies outside the standard library, and a
-Python module built on the same code.
+meshsearch finds neighbours among points in three dimensions, for C++17 and
+Python. It divides a box around the points into a uniform grid of cubic
+*cells*, and answers each *query* by visiting only the cells near it: the
+object nearest a point, the *N* nearest, every object within a radius or in a
+spherical shell, and how many there are. A query can be asked about one point,
+about an object already in the grid, or about a whole batch of either in one
+call, and the box can be periodic along any axis.
 
-The two APIs are one library with two spellings. Everything the C++ class does,
-the Python module does under a snake_case name, with numpy arrays in place of
-vectors. Both answer queries one at a time or in batches; C++ can also write
-results into containers the caller reuses, and Python into arrays passed as
-`out=`. [Names side by side](naming.md) maps them one to one.
+The library prescribes no unit. Coordinates, the cell side and every radius
+must simply be in the same one.
 
-## Install
-
-```
-pip install meshsearch
-```
-
-For the C++ library, build and install it with CMake:
-
-```
-cmake -S . -B build
-cmake --build build
-cmake --install build --prefix /path/to/prefix
+```{include} ../README.md
+:parser: myst_parser.sphinx_
+:start-after: <!-- docs:install-start -->
+:end-before: <!-- docs:install-end -->
 ```
 
-and use it from your own CMake project:
-
-```cmake
-find_package(meshsearch 0.2 CONFIG REQUIRED)
-target_link_libraries(your_target PRIVATE meshsearch::meshsearch)
+```{include} ../README.md
+:parser: myst_parser.sphinx_
+:start-after: <!-- docs:example-start -->
+:end-before: <!-- docs:example-end -->
 ```
 
-## In two lines
+The cell side, 0.2 here, is two *mean separations* of these points: the
+typical distance between neighbours. The [guide](guide.md#choosing-the-cell-side)
+explains how to choose it, and why the limits are given explicitly.
 
-**Python**
+## The pages
 
-```python
-import numpy as np
-import meshsearch
-
-grid = meshsearch.MeshGrid(x, y, z, cellsize)     # three arrays, one cell side
-
-grid.nearest_object(0.5, 0.5, 0.5)                # an index
-grid.nearest_objects(10, 0.5, 0.5, 0.5)           # the ten nearest, nearest first
-grid.close_objects(0.5, 0.5, 0.5, 0.15, 0.10)     # every object in a shell
-```
-
-**C++**
-
-```cpp
-#include "meshsearch/MeshGrid.h"
-
-meshsearch::MeshGrid grid(X, Y, Z, cellsize);     // three vectors, one cell side
-
-grid.nearestObject(0.5, 0.5, 0.5);                // an index
-grid.nearestObjects(10, 0.5, 0.5, 0.5);           // the ten nearest, nearest first
-grid.closeObjects(0.5, 0.5, 0.5, 0.15, 0.10);     // every object in a shell
-```
-
-Objects are identified by their position in the arrays passed to the
-constructor, and those indices are stable for the life of the grid. The
-[guide](guide.md) covers that and the rest of what is worth knowing before the
-reference pages.
+- [Guide](guide.md): what to know before the references, in the order a new
+  user meets it, with starting values.
+- [C++ reference](cpp.rst) and [Python reference](python.rst): every member,
+  its arguments and the errors it raises.
+- [Names side by side](naming.md): the C++ and Python spelling of each member.
+- [Performance](benchmark.md): what queries, construction and memory cost,
+  against scipy's `cKDTree` and scikit-learn's `BallTree`.
 
 ```{toctree}
 :maxdepth: 2
