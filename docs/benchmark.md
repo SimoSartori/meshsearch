@@ -325,56 +325,61 @@ kind, and 5.6 to 7.1 times on the radius query at four.
 Batched query times at four cell sides, with how the objects fill the cells:
 the share of cells left empty, the mean count in the cells that are not, and
 the 99th percentile of the count over all cells. The radius stays 2 *s*, so
-every row answers the same question. These tables were measured before the
-other ones: the same 1000 query points run three times, so they describe a
-working set already in cache, which favours the finer cell sides. With fresh
-query points, the nearest object on a million uniform points measured 0.91 µs
-at one mean separation, 0.76 at about 1.4 and 0.86 at two (median of five).
+every row answers the same question. The queries are drawn as for the other
+tables, 10,000 fresh points per run; the whole sweep takes under a minute, so
+it was run five times and each figure is the median of the five.
 
 ### Uniform, a million points
 
 | cell side | cells | objects per cell | empty cells | per non-empty cell | 99th percentile | construction (seconds) | memory (MiB) | nearest | k = 10 | radius |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 *s* | 1,000,000 | 1.0 | 36.8 % | 1.6 | 4 | 0.193 | 233 | 0.54 | 2.89 | 6.45 |
-| 2 *s* | 125,000 | 8.0 | 0.0 % | 8.0 | 15 | 0.140 | 93 | 0.75 | 1.88 | 2.11 |
-| 3 *s* | 39,304 | 25.4 | 0.0 % | 25.4 | 39 | 0.146 | 81 | 1.46 | 2.88 | 1.32 |
-| 4 *s* | 15,625 | 64.0 | 0.0 % | 64.0 | 83 | 0.137 | 92 | 2.42 | 3.37 | 1.43 |
+| 1 *s* | 1,000,000 | 1.0 | 36.8 % | 1.6 | 4 | 0.192 | 216 | 0.98 | 3.89 | 7.03 |
+| 2 *s* | 125,000 | 8.0 | 0.0 % | 8.0 | 15 | 0.144 | 101 | 0.90 | 2.23 | 2.38 |
+| 3 *s* | 39,304 | 25.4 | 0.0 % | 25.4 | 39 | 0.137 | 88 | 1.45 | 2.78 | 1.57 |
+| 4 *s* | 15,625 | 64.0 | 0.0 % | 64.0 | 83 | 0.136 | 92 | 2.55 | 3.52 | 1.64 |
 
 ### Uniform, ten million points
 
 | cell side | cells | objects per cell | empty cells | per non-empty cell | 99th percentile | construction (seconds) | memory (MiB) | nearest | k = 10 | radius |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 *s* | 10,077,696 | 1.0 | 37.1 % | 1.6 | 4 | 2.196 | 2,154 | 0.50 | 3.02 | 7.42 |
-| 2 *s* | 1,259,712 | 7.9 | 0.0 % | 7.9 | 15 | 1.659 | 853 | 0.84 | 2.27 | 2.59 |
-| 3 *s* | 373,248 | 26.8 | 0.0 % | 26.8 | 40 | 1.560 | 719 | 1.55 | 3.05 | 1.62 |
-| 4 *s* | 157,464 | 63.5 | 0.0 % | 63.5 | 83 | 1.500 | 689 | 3.92 | 4.88 | 1.99 |
+| 1 *s* | 10,077,696 | 1.0 | 37.1 % | 1.6 | 4 | 2.300 | 2,165 | 1.30 | 5.42 | 10.27 |
+| 2 *s* | 1,259,712 | 7.9 | 0.0 % | 7.9 | 15 | 1.704 | 850 | 1.70 | 3.69 | 4.42 |
+| 3 *s* | 373,248 | 26.8 | 0.0 % | 26.8 | 40 | 1.530 | 719 | 2.15 | 4.25 | 2.56 |
+| 4 *s* | 157,464 | 63.5 | 0.0 % | 63.5 | 83 | 1.451 | 697 | 3.34 | 5.02 | 2.51 |
 
 ### Clustered, a million points
 
 | cell side | cells | objects per cell | empty cells | per non-empty cell | 99th percentile | construction (seconds) | memory (MiB) | nearest | k = 10 | radius |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 *s* | 1,000,000 | 1.0 | 80.1 % | 5.0 | 24 | 0.195 | 216 | 1.10 | 2.46 | 9.20 |
-| 2 *s* | 125,000 | 8.0 | 34.7 % | 12.3 | 167 | 0.149 | 104 | 2.22 | 2.95 | 5.31 |
-| 3 *s* | 39,304 | 25.4 | 5.7 % | 27.0 | 414 | 0.139 | 92 | 3.19 | 3.34 | 4.89 |
-| 4 *s* | 15,625 | 64.0 | 0.1 % | 64.0 | 749 | 0.135 | 84 | 4.67 | 3.99 | 5.35 |
+| 1 *s* | 1,000,000 | 1.0 | 80.1 % | 5.0 | 24 | 0.186 | 221 | 1.20 | 2.79 | 8.62 |
+| 2 *s* | 125,000 | 8.0 | 34.7 % | 12.3 | 167 | 0.140 | 98 | 2.18 | 3.00 | 5.71 |
+| 3 *s* | 39,304 | 25.4 | 5.7 % | 27.0 | 414 | 0.136 | 89 | 3.17 | 3.38 | 5.00 |
+| 4 *s* | 15,625 | 64.0 | 0.1 % | 64.0 | 749 | 0.136 | 77 | 4.70 | 4.03 | 5.41 |
 
 ### Clustered, ten million points
 
 | cell side | cells | objects per cell | empty cells | per non-empty cell | 99th percentile | construction (seconds) | memory (MiB) | nearest | k = 10 | radius |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 *s* | 10,077,696 | 1.0 | 80.2 % | 5.0 | 24 | 2.219 | 2,147 | 1.11 | 2.57 | 10.52 |
-| 2 *s* | 1,259,712 | 7.9 | 34.9 % | 12.2 | 165 | 1.570 | 731 | 2.66 | 3.52 | 7.28 |
-| 3 *s* | 373,248 | 26.8 | 4.4 % | 28.0 | 434 | 1.468 | 613 | 4.08 | 4.51 | 5.92 |
-| 4 *s* | 157,464 | 63.5 | 0.1 % | 63.6 | 730 | 1.386 | 576 | 5.21 | 5.11 | 6.10 |
+| 1 *s* | 10,077,696 | 1.0 | 80.2 % | 5.0 | 24 | 2.198 | 2,181 | 1.85 | 3.83 | 11.90 |
+| 2 *s* | 1,259,712 | 7.9 | 34.9 % | 12.2 | 165 | 1.597 | 737 | 3.06 | 4.40 | 7.65 |
+| 3 *s* | 373,248 | 26.8 | 4.4 % | 28.0 | 434 | 1.447 | 610 | 4.02 | 4.69 | 5.95 |
+| 4 *s* | 157,464 | 63.5 | 0.1 % | 63.6 | 730 | 1.386 | 578 | 5.49 | 5.47 | 6.20 |
 
-With the queries in cache, on uniform data the nearest object is fastest at
-one mean separation, the ten nearest at two and the radius query at three to
-four; with fresh query points the nearest object's best moves to about 1.4
-mean separations, and it is 2.8 times slower at four than at one (the tables
-against the trees) rather than four to eight. On the clustered set the
+On uniform data the nearest object is fastest at one to two mean separations
+(level at a million points, one ahead by about 30 per cent at ten million),
+and 2.6 times slower at four than at one. The ten nearest are fastest at two.
+The radius query is fastest at three, level with four at ten million points,
+and four to four and a half times slower at one. On the clustered set the
 nearest and the ten nearest are fastest at one, where four fifths of the cells
-are empty, and slow down quickly as the cells grow: at four, one cell in a
-hundred holds over ten times the average. The radius query is fastest at three.
+are empty, and slow down as the cells grow: at four, one cell in a hundred
+holds over ten times the average, and the nearest object is three to four
+times slower than at one. The radius query is fastest at three.
+
+At two mean separations the cell side equals the radius, and that is a step:
+a ball whose radius is at least the cell side costs more than one just under
+it. On a million uniform points, in a separate measurement (median of five
+runs of 10,000 fresh queries), the radius query took 2.27 µs at a cell side
+of exactly 2 *s* and 1.55 µs at 2.02 *s*; at 3 *s* it took 1.50.
 
 ## Memory
 
@@ -399,7 +404,7 @@ four-mean-separation figures repeated within 2 per cent.
 
 Threads; additions and removals; boxes much longer along one axis than the
 others; clustering of other strengths or shapes; radii other than two mean
-separations; the cell-side sweep with fresh query points; the batched `count_objects` and `contains` against the trees; and machines other
+separations; the batched `count_objects` and `contains` against the trees; and machines other
 than the one above.
 
 ## Reproducing
