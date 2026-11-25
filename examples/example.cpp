@@ -1,6 +1,5 @@
 // A short tour of meshsearch::MeshGrid: build a grid over a set of points,
-// ask the three kinds of neighbour question, modify the grid, and handle a
-// bad query.
+// ask the four neighbour queries, modify the grid, and handle a bad query.
 //
 //   cmake -S . -B build && cmake --build build
 //   ./build/example
@@ -34,9 +33,10 @@ int main ()
   options.limits = std::array<std::array<double,2>,3>{{{0.,1.}, {0.,1.}, {0.,1.}}};
 
   // The cell side, the one tuning parameter. The mean separation of n points
-  // in a volume V is cbrt(V/n); two mean separations is a starting value for
-  // uniform data, and the guide shows what other choices cost. Coordinates,
-  // cell side and radii share one unit, whatever it is.
+  // in a volume V is cbrt(V/n). On uniform data the guide advises starting
+  // between 1.5 and 2.5 mean separations, here two, and shows what other
+  // choices cost. Coordinates, cell side and radii share one unit, whatever
+  // it is.
   const double volume = 1.;
   const double separation = std::cbrt(volume/double(n));
   const double cellsize = 2.*separation;

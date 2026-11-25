@@ -1,9 +1,14 @@
 # Benchmarks
 
-Two scripts measure meshsearch from Python. They produced the figures on the
-documentation's [performance page](https://simosartori.github.io/meshsearch/benchmark.html)
-(`docs/benchmark.md`). They are not part of the package: nothing installs
-them, and neither the library nor its tests use them.
+Two scripts measure meshsearch from Python. They produced most of the figures
+on the documentation's [performance page](https://simosartori.github.io/meshsearch/benchmark.html)
+(`docs/benchmark.md`), collected from their JSON output into the CSV files in
+`results/`. The page's cell-side tables are the median of five runs of the
+sweep (`results/cellside_runs.csv`); the step at a cell side equal to the
+radius (`radius_step.csv`), the cost of one Python call (`call_overhead.csv`)
+and the construction from C++ (`memory_cpp.csv`) were measured separately,
+with no script here. The scripts are not part of the package: nothing
+installs them, and neither the library nor its tests use them.
 
 - `benchmark.py` compares meshsearch with scipy's `cKDTree` and
   scikit-learn's `BallTree`: construction time, memory, and the nearest
@@ -63,7 +68,9 @@ python benchmarks/benchmark_cellsize.py --sweep --dists clustered
 | `--reps R` | `benchmark.py` | repetitions of each large batch (default 3) |
 | `--queries fresh\|repeat` | both | new query points for every run (default), or the same ones |
 | `--sweep` | `benchmark_cellsize.py` | every size (10⁶, 10⁷), cell side and input |
-| `--one LIBRARY N`, `--one-sweep N F` | each | a single row, as JSON; what the scripts run in each subprocess |
+| `--one LIBRARY N` | `benchmark.py` | a single row, as JSON, selected with `--factor F`, `--dist D` and `--periodic`; what the script runs in each subprocess |
+| `--one-large LIBRARY N` | `benchmark.py` | a single large-batch row, as JSON, at `--factor F` |
+| `--one-sweep N F` | `benchmark_cellsize.py` | a single row of the sweep, as JSON, with `--dist D` selecting the input |
 
 Each script prints its rows as JSON on standard output and its progress on
 standard error. On an Apple M1 Pro the comparison, periodic and large-batch

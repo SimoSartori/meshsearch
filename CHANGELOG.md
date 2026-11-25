@@ -29,8 +29,11 @@ Code written for 0.2 needs these changes:
   per-axis `periodic` flag, read back with `get_periodic()`. In Python,
   `MeshGrid(x, y, z, cellsize, *, limits=None, periodic=False)`, with
   `periodic` a bool or a triple, and the property `periodic`. Distances are
-  minimum-image distances, any radius is valid, and the cell side used, which
-  can be slightly below the one requested, is `get_cellsize()` (`cellsize`).
+  minimum-image distances, and any radius is valid. A periodic axis requires
+  limits and a nonzero extent, and every period must be an integer multiple
+  of the shortest. The cell side used is the largest not above the one
+  requested that divides the shortest period, and is `get_cellsize()`
+  (`cellsize`).
 - `countObjects` (`count_objects`): the number of objects `closeObjects`
   would return, for a point or an object, without collecting them.
 - Batches of every query in C++, under the same names, taking vectors of
@@ -63,10 +66,10 @@ Code written for 0.2 needs these changes:
 ### Changed
 
 - Results are reproducible: the same input gives the same results in the same
-  order, on every platform and with any number of threads. Which order objects
-  take within a cell, and so the order of `closeObjects` and
-  `get_objectsInCell` results, is not part of the interface; a change to it in
-  a later version will be announced here.
+  order, on Linux and macOS, on x86-64 and ARM, and with any number of
+  threads. Which order objects take within a cell, and so the order of
+  `closeObjects` and `get_objectsInCell` results, is not part of the
+  interface; a change to it in a later version will be announced here.
 - Python batches accept any array-like: a float64 or integer array is used as
   it is, and anything else, such as a list or a float32 array, is converted by
   numpy first. Before, points had to be a C-contiguous float64 array. An
@@ -109,6 +112,12 @@ Each fix below can change results on the inputs it concerns.
 - Python: a batched `nearest_objects` with an `n` larger than the grid could
   fail with `MemoryError` or a wrapped size before checking `n`; it now raises
   `meshsearch.Error`.
+
+### Build and packaging
+
+- Building from source needs nanobind 3.1 or later, below 4 (before, 2.0 or
+  later).
+- The Python package declares the Free Threading classifier.
 
 ## 0.2.1 — 2026-10-20
 

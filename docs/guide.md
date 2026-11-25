@@ -18,7 +18,7 @@ issues a new index, and no index is reused or renumbered.
 
 The *box* is the region in which the grid accepts points. Every member that
 takes a point, a query point or a new object, raises `Error` for a point
-outside it. It is set in one of two ways.
+outside it; only `contains`, which tests a point, does not. It is set in one of two ways.
 
 - **Explicit limits**, `{{xlo, xhi}, {ylo, yhi}, {zlo, zhi}}`, describe the
   region to which the points and every later query point belong: the survey
