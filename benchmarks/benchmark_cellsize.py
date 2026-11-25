@@ -9,8 +9,17 @@ answer stays the same size, about 33 neighbours, at every cell side.
 
 The tables this produces are in docs/benchmark.md, which reads them.
 
-    python benchmarks/benchmark_cellsize.py --sweep          # every size and cell side
-    python benchmarks/benchmark_cellsize.py --one-sweep 1000000 3   # one, as JSON
+    python benchmarks/benchmark_cellsize.py --sweep          # every size, cell side and input
+    python benchmarks/benchmark_cellsize.py --sweep --dists clustered
+    python benchmarks/benchmark_cellsize.py --one-sweep 1000000 3 --dist clustered   # one, as JSON
+
+Each query kind is timed per call and batched (1000 queries in one call); a
+per call time includes the cost of the Python call itself, which a batch does
+not pay, so a batched time is the one that shows what the cell side does.
+
+The inputs are the ones of benchmark.py: "uniform" points in the unit cube, or
+"clustered", a Thomas process described there. Queries come from the same
+distribution as the data.
 """
 
 import argparse
@@ -22,21 +31,13 @@ import time
 
 import numpy as np
 
+from benchmark import DISTS, columns, describe, points, query_points
+
 N_QUERIES = 1000
 K = 10
 SEED = 20260921
 FACTORS = [1, 2, 3, 4]
 SIZES = [1_000_000, 10_000_000]
-
-
-def points(n):
-    rng = np.random.default_rng(SEED)
-    return rng.random(n), rng.random(n), rng.random(n)
-
-
-def query_points():
-    rng = np.random.default_rng(SEED + 1)
-    return rng.random((N_QUERIES, 3))
 
 
 def rss_mib():
@@ -55,7 +56,11 @@ def _once(fn):
 
 
 def measure(grid, queries, radius):
+    qx, qy, qz = columns(queries)
     return {
+        "nn_batch_us": timed(lambda: grid.nearest_object(qx, qy, qz)) * 1e3,
+        "knn_batch_us": timed(lambda: grid.nearest_objects(K, qx, qy, qz)) * 1e3,
+        "radius_batch_us": timed(lambda: grid.close_objects(qx, qy, qz, radius)) * 1e3,
         "nn_us": timed(lambda: [grid.nearest_object(*p) for p in queries]) * 1e3,
         "knn_us": timed(lambda: [grid.nearest_objects(K, *p) for p in queries]) * 1e3,
         "radius_us": timed(lambda: [grid.close_objects(*p, radius) for p in queries]) * 1e3,
@@ -63,10 +68,10 @@ def measure(grid, queries, radius):
     }
 
 
-def run_sweep(n, factor):
+def run_sweep(n, factor, dist="uniform"):
     import meshsearch
-    x, y, z = points(n)
-    queries = query_points()
+    x, y, z = columns(points(n, dist))
+    queries = query_points(N_QUERIES, n, dist)
     mps = n ** (-1 / 3)
     cellsize = factor * mps
     radius = 2 * mps                      # the answer size is held constant
@@ -74,14 +79,15 @@ def run_sweep(n, factor):
     gc.collect()
     before = rss_mib()
     t = time.perf_counter()
-    grid = meshsearch.MeshGrid(x, y, z, cellsize)
+    grid = meshsearch.MeshGrid(x, y, z, cellsize, limits=[[0, 1]] * 3)
     build = time.perf_counter() - t
     memory = rss_mib() - before
 
     cells = grid.n_cells[0] * grid.n_cells[1] * grid.n_cells[2]
-    result = {"n": n, "factor": factor, "cellsize": cellsize, "build_s": build,
+    result = {"dist": dist, "n": n, "factor": factor, "cellsize": cellsize, "build_s": build,
               "memory_mib": memory, "n_cells": list(grid.n_cells), "cells": cells,
               "objects_per_cell": n / cells}
+    result.update(describe(dist, n))
     result.update(measure(grid, queries, radius))
     return result
 
@@ -99,19 +105,22 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--sweep", action="store_true")
     parser.add_argument("--one-sweep", nargs=2, type=int, metavar=("N", "FACTOR"))
+    parser.add_argument("--dist", choices=DISTS, default="uniform", help="with --one-sweep")
+    parser.add_argument("--dists", nargs="*", choices=DISTS, default=DISTS)
     args = parser.parse_args()
 
     if args.one_sweep:
-        print(json.dumps(run_sweep(*args.one_sweep)))
+        print(json.dumps(run_sweep(*args.one_sweep, args.dist)))
     elif args.sweep:
         rows = []
-        for n in SIZES:
-            for factor in FACTORS:
-                sys.stderr.write(f"  sweep n={n:,} cellsize={factor} mps ... ")
-                sys.stderr.flush()
-                row = spawn(["--one-sweep", str(n), str(factor)])
-                sys.stderr.write(f"{row['memory_mib']:,.0f} MiB\n")
-                rows.append(row)
+        for dist in args.dists:
+            for n in SIZES:
+                for factor in FACTORS:
+                    sys.stderr.write(f"  sweep {dist} n={n:,} cellsize={factor} mps ... ")
+                    sys.stderr.flush()
+                    row = spawn(["--one-sweep", str(n), str(factor), "--dist", dist])
+                    sys.stderr.write(f"{row['memory_mib']:,.0f} MiB\n")
+                    rows.append(row)
         print(json.dumps(rows, indent=2))
     else:
         parser.error("choose --sweep or --one-sweep N FACTOR")
