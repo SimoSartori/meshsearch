@@ -70,34 +70,39 @@ in a volume *V*, the cube root of *V*/*N*, which is the typical distance
 between neighbours if the objects were spread evenly. For a million objects in
 the unit cube, *s* = 0.01.
 
-**On uniform data, start at two mean separations.** The batched sweep on the
+**On uniform data, start between one and a half and two and a half mean
+separations.** The batched sweep on the
 [performance page](benchmark.md#cell-side) measures, for uniform points:
 
-- the nearest object is fastest at one to two mean separations, and about
-  2.6 times slower at four than at one;
-- the ten nearest are fastest at two;
-- a ball of radius two mean separations is fastest at three (level with four
-  at ten million points), and four to four and a half times slower at one;
-- at two mean separations no query kind is more than about 1.8 times slower
-  than at its own best side; the slowest there is that ball, whose radius
-  equals the cell side (see below).
+- the nearest object is fastest at one to one and a half mean separations,
+  and about 2.6 to 2.7 times slower at four than at one;
+- the ten nearest are fastest at one and a half, and within 8 per cent of
+  that at two;
+- a ball of radius two mean separations is fastest at two and a half to four,
+  and about four times slower at one;
+- no query kind is more than about twice as slow as at its own best side at
+  one and a half, where the slowest is that ball, or more than about 1.5 times
+  at two and a half, where the slowest is the nearest object. At two, where
+  the ball's radius equals the cell side (see below), the ball is up to 1.7
+  times slower.
 
-If one kind of query dominates the work, move towards its own best: one mean
-separation for nearest-object queries on large sets (at ten million points it
-was about 30 per cent faster than two, at a million level with it), which also
-uses two to two and a half times the memory, or three to four for balls of
-about two mean separations. For a ball
-or shell, the work grows with the radius measured in cells, so a radius much
-larger than the cell side calls for a larger cell.
+If one kind of query dominates the work, move towards its own best: one to
+one and a half mean separations for the nearest and the ten nearest objects
+(one uses 1.7 to 2 times the memory of one and a half), or two and a half to
+four for balls of about two mean separations. For a ball or shell, the work
+grows with the radius measured in cells, so a radius much larger than the
+cell side calls for a larger cell.
 
 For the ball of two mean separations, a cell side of 1.5 times the radius
-was the fastest, or within 2 per cent of it, on both data sets and at both
-sizes. A cell side equal to the radius was 1.1 to 1.8 times slower: a ball
-whose radius is at least the cell side costs more than one just under it, and
-on a million uniform points a cell side 1 per cent larger than the radius cut
-the time from 2.27 to 1.55 µs. So if you set the cell side from the radius,
-make it larger than the radius, not equal to it. This was measured for one
-radius only; it is a measured fact, not a rule for other radii.
+was the fastest, or within about 5 per cent of it, on both data sets and at
+both sizes; 1.25 times the radius was within 2 per cent of the best on three
+of the four and 14 per cent slower on the fourth. A cell side equal to the
+radius was 1.2 to 1.7 times slower: a ball whose radius is at least the cell
+side costs more than one just under it, and on a million uniform points a
+cell side 1 per cent larger than the radius cut the time from 2.27 to
+1.55 µs. So if you set the cell side from the radius, make it larger than the
+radius, not equal to it. This was measured for one radius only; it is a
+measured fact, not a rule for other radii.
 
 **On clustered data the best side is different, and has been measured for one
 kind of clustering only.** The performance page uses a set with nine tenths of
@@ -110,7 +115,7 @@ mean separation of the whole box:
 - at four mean separations one cell in a hundred holds 730 or more objects,
   against an average of 64, and the nearest object is three to four times
   slower than at one;
-- the ball of two mean separations is fastest at three.
+- the ball of two mean separations is fastest at two and a half to three.
 
 How strongly your data cluster, and where the queries fall, both move these
 optima, so for clustered data measure rather than guess: build grids at a few
@@ -447,25 +452,32 @@ may run while any other thread uses the grid.
 
 ## Memory
 
-A grid holds, for each object, its coordinates and bookkeeping: **37 bytes per
-object**. Each cell costs **at least 112 bytes**: 16 for the cell itself and 96
-for a table of cell offsets the queries walk, which has eight entries per cell
-on a grid with no periodic axis. Along a periodic axis the table needs half as
-many entries per cell, so a grid periodic along all three axes spends at least
-28 bytes per cell. There are `nx * ny * nz` cells, so their share grows as the
-cube of the box side over the cell side, and it dominates at fine cell sides:
-at one mean separation there are about as many cells as objects, which adds
-at least 112 bytes per object to the 37; at two, an eighth as many. On clustered data many cells
-hold nothing, yet each still costs its share: with the box's own mean
-separation as the cell side, four fifths of them were empty on the performance
-page's clustered set.
+What a grid allocates follows from the number of objects and of cells. Each
+object costs **37 bytes**: its coordinates and the bookkeeping that maps
+indices to storage. Each cell costs **at least 112 bytes** on a grid with no
+periodic axis: 16 for the cell itself and 96 for a table of cell offsets the
+queries walk, which has eight entries per cell. Along a periodic axis the
+table needs half as many entries per cell, so a grid periodic along all three
+axes spends about 28 bytes per cell. There are `nx * ny * nz` cells, so their
+share grows as the cube of the box side over the cell side, and it dominates
+at fine cell sides: at one mean separation there are about as many cells as
+objects. At ten million objects and one mean separation, that is 353 MiB for
+the objects and at least 1,076 MiB for the 10,077,696 cells, about 1.4 GiB;
+at two mean separations there are an eighth as many cells. On clustered data
+many cells hold nothing, yet each still costs its share: with the box's own
+mean separation as the cell side, four fifths of them were empty on the
+performance page's clustered set.
 
 Construction needs more for a while: a temporary cell index of 8 bytes per
 object, and in Python a copy of the three coordinate arrays (24 bytes per
-object) passed to the C++ constructor. Both are freed when the constructor
-returns, but the allocator may keep the memory in the process. At ten million
-objects and one mean separation the process grew by 1.1 to 2.1 GiB in repeated
-measurements; the [performance page](benchmark.md#memory) has them.
+object) passed to the C++ constructor, 76 and 229 MiB at ten million objects.
+Both are freed when the constructor returns, but the allocator may keep the
+memory in the process.
+
+So how much the process grows varies between runs. At ten million objects and
+one mean separation it grew by 1.0 to 2.3 GiB in repeated, identical
+measurements, in some runs less than the grid allocates; the
+[performance page](benchmark.md#memory) has them.
 
 A batch allocates its results, and a large batch some working space in
 proportion to the number of queries. Removals and additions never shrink a

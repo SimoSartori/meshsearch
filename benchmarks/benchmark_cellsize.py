@@ -1,6 +1,6 @@
 """What the cell side costs: build time, memory, cell occupancy and the three
-query kinds, swept over cell sides of one to four mean separations at two data
-sizes.
+query kinds, swept over cell sides of one to four mean separations (in half
+steps up to three) at two data sizes.
 
 The cell side is meshsearch's one tuning parameter. A fine grid holds few
 objects per cell and many cells; a coarse one the reverse, and every cell
@@ -47,7 +47,7 @@ from benchmark import DISTS, N_QUERIES, columns, describe, points, query_sets
 REPEATS = 3
 K = 10
 SEED = 20260921
-FACTORS = [1, 2, 3, 4]
+FACTORS = [1, 1.5, 2, 2.5, 3, 4]
 SIZES = [1_000_000, 10_000_000]
 
 
@@ -135,7 +135,7 @@ def spawn(args_list):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--sweep", action="store_true")
-    parser.add_argument("--one-sweep", nargs=2, type=int, metavar=("N", "FACTOR"))
+    parser.add_argument("--one-sweep", nargs=2, type=float, metavar=("N", "FACTOR"))
     parser.add_argument("--dist", choices=DISTS, default="uniform", help="with --one-sweep")
     parser.add_argument("--dists", nargs="*", choices=DISTS, default=DISTS)
     parser.add_argument("--queries", choices=["fresh", "repeat"], default="fresh",
@@ -143,7 +143,8 @@ def main():
     args = parser.parse_args()
 
     if args.one_sweep:
-        print(json.dumps(run_sweep(*args.one_sweep, args.dist, args.queries)))
+        n, factor = args.one_sweep
+        print(json.dumps(run_sweep(int(n), factor, args.dist, args.queries)))
     elif args.sweep:
         rows = []
         for dist in args.dists:
