@@ -543,6 +543,10 @@ namespace meshsearch {
 
     std::vector<CellBlock> m_cells;
 
+    size_t m_occupied = 0;
+    double m_countFrom = 0.;
+    double m_closeFrom = 0.;
+
     size_t getLinearIndex (unsigned int ix, unsigned int iy, unsigned int iz) const;
 
     template <class Threshold, class Visit>
@@ -574,6 +578,21 @@ namespace meshsearch {
     void closeScan (const std::array<unsigned int, 3>& target,
                     double X, double Y, double Z, size_t self,
                     double Rmax, double Rmin, Sink&& sink) const;
+
+    void wholeCount ();
+    void wholeGates (std::ptrdiff_t change);
+    std::size_t countWhole (double X, double Y, double Z, double Rmax, double Rmin) const;
+    std::size_t countWhole (unsigned int index, double Rmax, double Rmin) const;
+    void closeWhole (double X, double Y, double Z, double Rmax, double Rmin, std::vector<unsigned int>& out) const;
+    void closeWhole (unsigned int index, double Rmax, double Rmin, std::vector<unsigned int>& out) const;
+    template <bool Exclude>
+    std::size_t countRules (const std::array<unsigned int, 3>& target, double X, double Y, double Z, size_t self,
+                            double Rmax, double Rmin) const;
+    template <bool Exclude>
+    void closeRules (std::vector<unsigned int>& out, const std::array<unsigned int, 3>& target,
+                     double X, double Y, double Z, size_t self, double Rmax, double Rmin) const;
+    void closeRulesPeriodic (std::vector<unsigned int>& out, const std::array<unsigned int, 3>& target,
+                             double X, double Y, double Z, size_t self, double Rmax, double Rmin) const;
 
   };
 

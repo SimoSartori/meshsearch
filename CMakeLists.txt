@@ -53,7 +53,7 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
   list(APPEND MESHSEARCH_PRIVATE_OPTIONS -Wall -Wextra)
 endif()
 
-add_library(meshsearch STATIC src/MeshGrid.cpp src/MeshGridBatch.cpp)
+add_library(meshsearch STATIC src/MeshGrid.cpp src/MeshGridBatch.cpp src/MeshGridWhole.cpp)
 add_library(meshsearch::meshsearch ALIAS meshsearch)
 
 # The archive gets linked into the Python module, which is a shared object.
