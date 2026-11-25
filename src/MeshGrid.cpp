@@ -325,6 +325,159 @@ namespace {
     return (start < double(nShells)) ? static_cast<unsigned int>(start) : static_cast<unsigned int>(nShells);
   }
 
+  bool axisBeyond (const CellFaces& faces, const int axis, const std::int64_t cell, const double q, const double threshold)
+  {
+    const double gap = axisGap(faces, axis, cell, q);
+    const double gap_sq = gap*gap;
+    return gap_sq >= tiny_sq && gap_sq*skip_factor > threshold;
+  }
+
+  class StepWindow {
+  public:
+    std::int64_t lo[3], hi[3];
+
+    StepWindow (const CellFaces& faces, const std::int64_t* target, const double X, const double Y, const double Z,
+                const std::int64_t* first, const std::int64_t* last)
+      : m_faces(faces)
+    {
+      m_q[0] = X;
+      m_q[1] = Y;
+      m_q[2] = Z;
+      for (int a=0; a<3; ++a) {
+        m_target[a] = target[a];
+        m_first[a] = first[a];
+        m_last[a] = last[a];
+      }
+    }
+
+    void update (const double threshold, const bool reach)
+    {
+      if (m_set && threshold == m_threshold && reach == m_reach) return;
+      m_set = true;
+      m_threshold = threshold;
+      m_reach = reach;
+      const bool bounded = reach && threshold <= huge_sq;
+      for (int a=0; a<3; ++a) {
+        std::int64_t l = m_first[a], h = m_last[a];
+        if (bounded) axisRange(a, threshold, l, h);
+        lo[a] = l-m_target[a];
+        hi[a] = h-m_target[a];
+      }
+    }
+
+  private:
+    void axisRange (const int a, const double threshold, std::int64_t& l, std::int64_t& h) const
+    {
+      const std::int64_t t = m_target[a];
+      const double q = m_q[a];
+      if (axisBeyond(m_faces, a, t, q, threshold)) return;
+      const double reach = (std::sqrt(threshold)+m_faces.pad[a])/m_faces.cellsize;
+      const double pos = (q-m_faces.lo[a])/m_faces.cellsize;
+      const double up = std::floor(pos+reach);
+      const double down = std::floor(pos-reach);
+      if (up < double(h)) h = (up > double(t)) ? static_cast<std::int64_t>(up) : t;
+      while (h < m_last[a] && !axisBeyond(m_faces, a, h+1, q, threshold)) ++h;
+      while (h > t && axisBeyond(m_faces, a, h, q, threshold)) --h;
+      if (down > double(l)) l = (down < double(t)) ? static_cast<std::int64_t>(down) : t;
+      while (l > m_first[a] && !axisBeyond(m_faces, a, l-1, q, threshold)) --l;
+      while (l < t && axisBeyond(m_faces, a, l, q, threshold)) ++l;
+    }
+
+    const CellFaces& m_faces;
+    double m_q[3];
+    std::int64_t m_target[3], m_first[3], m_last[3];
+    double m_threshold = 0.;
+    bool m_reach = false;
+    bool m_set = false;
+  };
+
+  StepWindow plainWindow (const CellFaces& faces, const std::array<unsigned int, 3>& target,
+                          const std::array<unsigned int, 3>& nCells, const double X, const double Y, const double Z)
+  {
+    const std::int64_t where[3] = {target[0], target[1], target[2]};
+    const std::int64_t first[3] = {0, 0, 0};
+    const std::int64_t last[3] = {std::int64_t(nCells[0])-1, std::int64_t(nCells[1])-1, std::int64_t(nCells[2])-1};
+    return StepWindow(faces, where, X, Y, Z, first, last);
+  }
+
+
+  template <class Offset>
+  class ShellSegments {
+  public:
+    const Offset* begin = nullptr;
+    const Offset* end = nullptr;
+
+    ShellSegments (const std::vector<Offset>& shell, const std::vector<size_t>& runs, const StepWindow& w,
+                   const unsigned int shellIndex)
+      : m_e(shell.data()), m_runs(runs.data()), m_nRuns(runs.size()-1),
+        m_ihi(w.hi[0]), m_jlo(w.lo[1]), m_jhi(w.hi[1]), m_klo(w.lo[2]), m_khi(w.hi[2])
+    {
+      const std::int64_t extent = std::int64_t(shellIndex)+1;
+      if (w.lo[0] <= -extent && w.hi[0] >= extent && w.lo[1] <= -extent && w.hi[1] >= extent) {
+        m_whole = true;
+        return;
+      }
+      size_t a = 0, b = m_nRuns;
+      while (a < b) {
+        const size_t m = (a+b)/2;
+        if (m_e[m_runs[m]].i < w.lo[0]) a = m+1;
+        else b = m;
+      }
+      m_run = a;
+    }
+
+    bool next ()
+    {
+      if (m_whole) {
+        if (m_run > 0 || m_nRuns == 0) return false;
+        m_run = 1;
+        begin = m_e;
+        end = m_e+m_runs[m_nRuns];
+        return true;
+      }
+      for (; m_run<m_nRuns; ++m_run) {
+        size_t p = m_runs[m_run];
+        if (m_e[p].i > m_ihi) break;
+        size_t q = m_runs[m_run+1];
+        if (m_e[p].j < m_jlo) {
+          size_t hi = q;
+          while (p < hi) {
+            const size_t m = (p+hi)/2;
+            if (m_e[m].j < m_jlo) p = m+1;
+            else hi = m;
+          }
+        }
+        if (p < q && m_e[q-1].j > m_jhi) {
+          size_t lo = p;
+          while (lo < q) {
+            const size_t m = (lo+q)/2;
+            if (m_e[m].j <= m_jhi) lo = m+1;
+            else q = m;
+          }
+        }
+        if (p == q) continue;
+        ++m_run;
+        begin = m_e+p;
+        end = m_e+q;
+        return true;
+      }
+      return false;
+    }
+
+    bool holds (const Offset& entry) const
+    {
+      return entry.k >= m_klo && entry.k <= m_khi;
+    }
+
+  private:
+    const Offset* m_e;
+    const size_t* m_runs;
+    size_t m_nRuns;
+    std::int64_t m_ihi, m_jlo, m_jhi, m_klo, m_khi;
+    bool m_whole = false;
+    size_t m_run = 0;
+  };
+
 }
 
 
@@ -572,7 +725,18 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
     }
   }
 
+  auto runs = std::make_shared<std::vector<std::vector<size_t>>>(dim_mask);
+  for (size_t s=0; s<mask->size(); ++s) {
+    const auto& shell = (*mask)[s];
+    auto& starts = (*runs)[s];
+    for (size_t e=0; e<shell.size(); ++e)
+      if (e == 0 || shell[e].i != shell[e-1].i) starts.push_back(e);
+    starts.push_back(shell.size());
+    starts.shrink_to_fit();
+  }
+
   m_mask = mask;
+  m_runs = runs;
 
   const size_t total_cells = static_cast<size_t>(total);
   m_cells.assign(total_cells, CellBlock{0, 0, 0});
@@ -778,46 +942,65 @@ void meshsearch::MeshGrid::walkPeriodic (const std::array<unsigned int, 3>& targ
     firstShellIndex = firstShell(start, nShells, Rmin, Rmin_sq);
   }
 
+  std::int64_t first[3], last[3], endLimit = std::numeric_limits<std::int64_t>::max();
+  for (int a=0; a<3; ++a) {
+    if (m_periodic[a]) {
+      first[a] = where[a]-cells[a]/2;
+      last[a] = where[a]+(cells[a]+1)/2-1;
+      endLimit = std::min(endLimit, cells[a]-3);
+    }
+    else {
+      first[a] = 0;
+      last[a] = cells[a]-1;
+    }
+  }
+  StepWindow window(faces, where, X, Y, Z, first, last);
+
   for (unsigned int maskInd=firstShellIndex; maskInd<nShells; ++maskInd) {
     if (shellBeyondPeriodic(maskInd, m_cellsize, m_slack, threshold())) break;
+    window.update(threshold(), 2*(std::int64_t(maskInd)+1) <= endLimit);
 
-    for (const auto& offset : (*m_mask)[maskInd]) {
-      const std::int64_t step[3] = {offset.i, offset.j, offset.k};
-      std::int64_t unwrapped[3], cell[3];
-      double shift[3];
-      bool inside = true, end = false, wrapped = false;
+    ShellSegments<GridOffset> segments((*m_mask)[maskInd], (*m_runs)[maskInd], window, maskInd);
+    while (segments.next()) {
+      for (const GridOffset* entry=segments.begin; entry!=segments.end; ++entry) {
+        if (!segments.holds(*entry)) continue;
+        const std::int64_t step[3] = {entry->i, entry->j, entry->k};
+        std::int64_t unwrapped[3], cell[3];
+        double shift[3];
+        bool inside = true, end = false, wrapped = false;
 
-      for (int a=0; a<3; ++a) {
-        const std::int64_t u = where[a]+step[a];
-        unwrapped[a] = u;
-        shift[a] = 0.;
-        if (!m_periodic[a]) {
-          if (u < 0 || u >= cells[a]) { inside = false; break; }
-          cell[a] = u;
+        for (int a=0; a<3; ++a) {
+          const std::int64_t u = where[a]+step[a];
+          unwrapped[a] = u;
+          shift[a] = 0.;
+          if (!m_periodic[a]) {
+            if (u < 0 || u >= cells[a]) { inside = false; break; }
+            cell[a] = u;
+            continue;
+          }
+          if (u < 0) { cell[a] = u+cells[a]; shift[a] = period[a]; wrapped = true; }
+          else if (u >= cells[a]) { cell[a] = u-cells[a]; shift[a] = -period[a]; wrapped = true; }
+          else cell[a] = u;
+          if (2*step[a] >= cells[a]-2 || -2*step[a] >= cells[a]-2) end = true;
+        }
+        if (!inside) continue;
+
+        const CellBlock& block = m_cells[getLinearIndex(static_cast<unsigned int>(cell[0]), static_cast<unsigned int>(cell[1]), static_cast<unsigned int>(cell[2]))];
+        if (block.count == 0) continue;
+        const size_t first = block.start;
+        const double* x = m_X.data()+first;
+        const double* y = m_Y.data()+first;
+        const double* z = m_Z.data()+first;
+        auto visitSlot = [&] (const size_t k, const double dist_sq) { visit(first, k, dist_sq); };
+
+        if (end) {
+          scanImages(x, y, z, block.count, X, Y, Z, period, half, visitSlot);
           continue;
         }
-        if (u < 0) { cell[a] = u+cells[a]; shift[a] = period[a]; wrapped = true; }
-        else if (u >= cells[a]) { cell[a] = u-cells[a]; shift[a] = -period[a]; wrapped = true; }
-        else cell[a] = u;
-        if (2*step[a] >= cells[a]-2 || -2*step[a] >= cells[a]-2) end = true;
+        if (cellBeyond(faces, unwrapped[0], unwrapped[1], unwrapped[2], X, Y, Z, threshold())) continue;
+        if (wrapped) scanShifted(x, y, z, block.count, X, Y, Z, shift[0], shift[1], shift[2], visitSlot);
+        else scanBlock(x, y, z, block.count, X, Y, Z, visitSlot);
       }
-      if (!inside) continue;
-
-      const CellBlock& block = m_cells[getLinearIndex(static_cast<unsigned int>(cell[0]), static_cast<unsigned int>(cell[1]), static_cast<unsigned int>(cell[2]))];
-      if (block.count == 0) continue;
-      const size_t first = block.start;
-      const double* x = m_X.data()+first;
-      const double* y = m_Y.data()+first;
-      const double* z = m_Z.data()+first;
-      auto visitSlot = [&] (const size_t k, const double dist_sq) { visit(first, k, dist_sq); };
-
-      if (end) {
-        scanImages(x, y, z, block.count, X, Y, Z, period, half, visitSlot);
-        continue;
-      }
-      if (cellBeyond(faces, unwrapped[0], unwrapped[1], unwrapped[2], X, Y, Z, threshold())) continue;
-      if (wrapped) scanShifted(x, y, z, block.count, X, Y, Z, shift[0], shift[1], shift[2], visitSlot);
-      else scanBlock(x, y, z, block.count, X, Y, Z, visitSlot);
     }
   }
 }
@@ -972,23 +1155,23 @@ void meshsearch::MeshGrid::walkPlain (const std::array<unsigned int, 3>& target,
   const int targetY = static_cast<int>(target[1]);
   const int targetZ = static_cast<int>(target[2]);
 
-  const int nCx = static_cast<int>(m_nCells[0]);
-  const int nCy = static_cast<int>(m_nCells[1]);
-  const int nCz = static_cast<int>(m_nCells[2]);
-
   const CellFaces faces = cellFaces(m_lims, m_nCells, m_cellsize);
+  StepWindow window = plainWindow(faces, target, m_nCells, X, Y, Z);
 
   const unsigned int nShells = static_cast<unsigned int>(m_mask->size());
   const unsigned int min_mask_idx = firstShell(faces, nShells, Rmin, Rmin*Rmin);
 
   for (unsigned int maskInd=min_mask_idx; maskInd<nShells; maskInd++) {
     if (shellBeyond(maskInd, m_cellsize, threshold())) break;
+    window.update(threshold(), true);
 
-    for (const auto& offset : (*m_mask)[maskInd]) {
-      const std::int64_t currX = std::int64_t(targetX)+offset.i;
-      const std::int64_t currY = std::int64_t(targetY)+offset.j;
-      const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
-      if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
+    ShellSegments<GridOffset> segments((*m_mask)[maskInd], (*m_runs)[maskInd], window, maskInd);
+    while (segments.next()) {
+      for (const GridOffset* entry=segments.begin; entry!=segments.end; ++entry) {
+        if (!segments.holds(*entry)) continue;
+        const std::int64_t currX = std::int64_t(targetX)+entry->i;
+        const std::int64_t currY = std::int64_t(targetY)+entry->j;
+        const std::int64_t currZ = std::int64_t(targetZ)+entry->k;
         const CellBlock& block = m_cells[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
         if (block.count == 0 || cellBeyond(faces, currX, currY, currZ, X, Y, Z, threshold())) continue;
         const size_t first = block.start;
@@ -1032,11 +1215,8 @@ unsigned int meshsearch::MeshGrid::nearestObject (const double X, const double Y
   const int targetY = static_cast<int>(target[1]);
   const int targetZ = static_cast<int>(target[2]);
 
-  const int nCx = static_cast<int>(m_nCells[0]);
-  const int nCy = static_cast<int>(m_nCells[1]);
-  const int nCz = static_cast<int>(m_nCells[2]);
-
   const CellFaces faces = cellFaces(m_lims, m_nCells, m_cellsize);
+  StepWindow window = plainWindow(faces, target, m_nCells, X, Y, Z);
 
   double min_dist_sq = std::numeric_limits<double>::max();
   size_t finalSlot = no_slot;
@@ -1044,12 +1224,15 @@ unsigned int meshsearch::MeshGrid::nearestObject (const double X, const double Y
 
   while (maskInd < m_mask->size()) {
     if (shellBeyond(maskInd, m_cellsize, min_dist_sq)) break;
+    window.update(min_dist_sq, true);
 
-    for (const auto& offset : (*m_mask)[maskInd]) {
-      const std::int64_t currX = std::int64_t(targetX)+offset.i;
-      const std::int64_t currY = std::int64_t(targetY)+offset.j;
-      const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
-      if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
+    ShellSegments<GridOffset> segments((*m_mask)[maskInd], (*m_runs)[maskInd], window, maskInd);
+    while (segments.next()) {
+      for (const GridOffset* entry=segments.begin; entry!=segments.end; ++entry) {
+        if (!segments.holds(*entry)) continue;
+        const std::int64_t currX = std::int64_t(targetX)+entry->i;
+        const std::int64_t currY = std::int64_t(targetY)+entry->j;
+        const std::int64_t currZ = std::int64_t(targetZ)+entry->k;
         const CellBlock& block = m_cells[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
         if (block.count == 0 || cellBeyond(faces, currX, currY, currZ, X, Y, Z, min_dist_sq)) continue;
         const size_t first = block.start;
@@ -1092,11 +1275,8 @@ unsigned int meshsearch::MeshGrid::nearestObject (const unsigned int index) cons
   const int targetY = static_cast<int>(target[1]);
   const int targetZ = static_cast<int>(target[2]);
 
-  const int nCx = static_cast<int>(m_nCells[0]);
-  const int nCy = static_cast<int>(m_nCells[1]);
-  const int nCz = static_cast<int>(m_nCells[2]);
-
   const CellFaces faces = cellFaces(m_lims, m_nCells, m_cellsize);
+  StepWindow window = plainWindow(faces, target, m_nCells, X, Y, Z);
 
   double min_dist_sq = std::numeric_limits<double>::max();
   size_t finalSlot = no_slot;
@@ -1104,12 +1284,15 @@ unsigned int meshsearch::MeshGrid::nearestObject (const unsigned int index) cons
 
   while (maskInd < m_mask->size()) {
     if (shellBeyond(maskInd, m_cellsize, min_dist_sq)) break;
+    window.update(min_dist_sq, true);
 
-    for (const auto& offset : (*m_mask)[maskInd]) {
-      const std::int64_t currX = std::int64_t(targetX)+offset.i;
-      const std::int64_t currY = std::int64_t(targetY)+offset.j;
-      const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
-      if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
+    ShellSegments<GridOffset> segments((*m_mask)[maskInd], (*m_runs)[maskInd], window, maskInd);
+    while (segments.next()) {
+      for (const GridOffset* entry=segments.begin; entry!=segments.end; ++entry) {
+        if (!segments.holds(*entry)) continue;
+        const std::int64_t currX = std::int64_t(targetX)+entry->i;
+        const std::int64_t currY = std::int64_t(targetY)+entry->j;
+        const std::int64_t currZ = std::int64_t(targetZ)+entry->k;
         const CellBlock& block = m_cells[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
         if (block.count == 0 || cellBeyond(faces, currX, currY, currZ, X, Y, Z, min_dist_sq)) continue;
         const size_t first = block.start;
@@ -1174,11 +1357,8 @@ void meshsearch::MeshGrid::nearestObjects (const unsigned int N, const double X,
   const int targetY = static_cast<int>(target[1]);
   const int targetZ = static_cast<int>(target[2]);
 
-  const int nCx = static_cast<int>(m_nCells[0]);
-  const int nCy = static_cast<int>(m_nCells[1]);
-  const int nCz = static_cast<int>(m_nCells[2]);
-
   const CellFaces faces = cellFaces(m_lims, m_nCells, m_cellsize);
+  StepWindow window = plainWindow(faces, target, m_nCells, X, Y, Z);
 
   auto walk = [&] (auto& pq)
   {
@@ -1186,12 +1366,15 @@ void meshsearch::MeshGrid::nearestObjects (const unsigned int N, const double X,
 
     while (maskInd < m_mask->size()) {
       if (shellBeyond(maskInd, m_cellsize, pq.T)) break;
+      window.update(pq.T, true);
 
-      for (const auto& offset : (*m_mask)[maskInd]) {
-        const std::int64_t currX = std::int64_t(targetX)+offset.i;
-        const std::int64_t currY = std::int64_t(targetY)+offset.j;
-        const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
-        if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
+      ShellSegments<GridOffset> segments((*m_mask)[maskInd], (*m_runs)[maskInd], window, maskInd);
+      while (segments.next()) {
+        for (const GridOffset* entry=segments.begin; entry!=segments.end; ++entry) {
+          if (!segments.holds(*entry)) continue;
+          const std::int64_t currX = std::int64_t(targetX)+entry->i;
+          const std::int64_t currY = std::int64_t(targetY)+entry->j;
+          const std::int64_t currZ = std::int64_t(targetZ)+entry->k;
           const CellBlock& block = m_cells[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
           if (block.count == 0 || cellBeyond(faces, currX, currY, currZ, X, Y, Z, pq.T)) continue;
           const size_t first = block.start;
@@ -1242,11 +1425,8 @@ void meshsearch::MeshGrid::nearestObjects (const unsigned int N, const unsigned 
   const int targetY = static_cast<int>(target[1]);
   const int targetZ = static_cast<int>(target[2]);
 
-  const int nCx = static_cast<int>(m_nCells[0]);
-  const int nCy = static_cast<int>(m_nCells[1]);
-  const int nCz = static_cast<int>(m_nCells[2]);
-
   const CellFaces faces = cellFaces(m_lims, m_nCells, m_cellsize);
+  StepWindow window = plainWindow(faces, target, m_nCells, X, Y, Z);
 
   auto walk = [&] (auto& pq)
   {
@@ -1254,12 +1434,15 @@ void meshsearch::MeshGrid::nearestObjects (const unsigned int N, const unsigned 
 
     while (maskInd < m_mask->size()) {
       if (shellBeyond(maskInd, m_cellsize, pq.T)) break;
+      window.update(pq.T, true);
 
-      for (const auto& offset : (*m_mask)[maskInd]) {
-        const std::int64_t currX = std::int64_t(targetX)+offset.i;
-        const std::int64_t currY = std::int64_t(targetY)+offset.j;
-        const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
-        if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
+      ShellSegments<GridOffset> segments((*m_mask)[maskInd], (*m_runs)[maskInd], window, maskInd);
+      while (segments.next()) {
+        for (const GridOffset* entry=segments.begin; entry!=segments.end; ++entry) {
+          if (!segments.holds(*entry)) continue;
+          const std::int64_t currX = std::int64_t(targetX)+entry->i;
+          const std::int64_t currY = std::int64_t(targetY)+entry->j;
+          const std::int64_t currZ = std::int64_t(targetZ)+entry->k;
           const CellBlock& block = m_cells[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
           if (block.count == 0 || cellBeyond(faces, currX, currY, currZ, X, Y, Z, pq.T)) continue;
           const size_t first = block.start;
@@ -1330,11 +1513,8 @@ void meshsearch::MeshGrid::closeObjects (const double X, const double Y, const d
   const int targetY = static_cast<int>(target[1]);
   const int targetZ = static_cast<int>(target[2]);
 
-  const int nCx = static_cast<int>(m_nCells[0]);
-  const int nCy = static_cast<int>(m_nCells[1]);
-  const int nCz = static_cast<int>(m_nCells[2]);
-
   const CellFaces faces = cellFaces(m_lims, m_nCells, m_cellsize);
+  StepWindow window = plainWindow(faces, target, m_nCells, X, Y, Z);
 
   const unsigned int nShells = static_cast<unsigned int>(m_mask->size());
   const unsigned int min_mask_idx = firstShell(faces, nShells, Rmin, Rmin_sq);
@@ -1345,12 +1525,15 @@ void meshsearch::MeshGrid::closeObjects (const double X, const double Y, const d
 
   for (unsigned int maskInd=min_mask_idx; maskInd<nShells; maskInd++) {
     if (shellBeyond(maskInd, m_cellsize, Rmax_sq)) break;
+    window.update(Rmax_sq, true);
 
-    for (const auto& offset : (*m_mask)[maskInd]) {
-      const std::int64_t currX = std::int64_t(targetX)+offset.i;
-      const std::int64_t currY = std::int64_t(targetY)+offset.j;
-      const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
-      if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
+    ShellSegments<GridOffset> segments((*m_mask)[maskInd], (*m_runs)[maskInd], window, maskInd);
+    while (segments.next()) {
+      for (const GridOffset* entry=segments.begin; entry!=segments.end; ++entry) {
+        if (!segments.holds(*entry)) continue;
+        const std::int64_t currX = std::int64_t(targetX)+entry->i;
+        const std::int64_t currY = std::int64_t(targetY)+entry->j;
+        const std::int64_t currZ = std::int64_t(targetZ)+entry->k;
         const CellBlock& block = m_cells[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
         if (block.count == 0 || cellBeyond(faces, currX, currY, currZ, X, Y, Z, Rmax_sq)) continue;
         const size_t first = block.start;
@@ -1401,11 +1584,8 @@ void meshsearch::MeshGrid::closeObjects (const unsigned int index, const double 
   const int targetY = static_cast<int>(target[1]);
   const int targetZ = static_cast<int>(target[2]);
 
-  const int nCx = static_cast<int>(m_nCells[0]);
-  const int nCy = static_cast<int>(m_nCells[1]);
-  const int nCz = static_cast<int>(m_nCells[2]);
-
   const CellFaces faces = cellFaces(m_lims, m_nCells, m_cellsize);
+  StepWindow window = plainWindow(faces, target, m_nCells, X, Y, Z);
 
   const unsigned int nShells = static_cast<unsigned int>(m_mask->size());
   const unsigned int min_mask_idx = firstShell(faces, nShells, Rmin, Rmin_sq);
@@ -1416,12 +1596,15 @@ void meshsearch::MeshGrid::closeObjects (const unsigned int index, const double 
 
   for (unsigned int maskInd=min_mask_idx; maskInd<nShells; maskInd++) {
     if (shellBeyond(maskInd, m_cellsize, Rmax_sq)) break;
+    window.update(Rmax_sq, true);
 
-    for (const auto& offset : (*m_mask)[maskInd]) {
-      const std::int64_t currX = std::int64_t(targetX)+offset.i;
-      const std::int64_t currY = std::int64_t(targetY)+offset.j;
-      const std::int64_t currZ = std::int64_t(targetZ)+offset.k;
-      if (currX >= 0 && currX < nCx && currY >= 0 && currY < nCy && currZ >= 0 && currZ < nCz) {
+    ShellSegments<GridOffset> segments((*m_mask)[maskInd], (*m_runs)[maskInd], window, maskInd);
+    while (segments.next()) {
+      for (const GridOffset* entry=segments.begin; entry!=segments.end; ++entry) {
+        if (!segments.holds(*entry)) continue;
+        const std::int64_t currX = std::int64_t(targetX)+entry->i;
+        const std::int64_t currY = std::int64_t(targetY)+entry->j;
+        const std::int64_t currZ = std::int64_t(targetZ)+entry->k;
         const CellBlock& block = m_cells[getLinearIndex(static_cast<unsigned int>(currX), static_cast<unsigned int>(currY), static_cast<unsigned int>(currZ))];
         if (block.count == 0 || cellBeyond(faces, currX, currY, currZ, X, Y, Z, Rmax_sq)) continue;
         const size_t first = block.start;
