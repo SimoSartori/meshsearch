@@ -303,6 +303,12 @@ meshsearch::MeshGrid::Batch meshsearch::MeshGrid::closeObjects (const std::vecto
 void meshsearch::MeshGrid::closeObjects (const std::vector<unsigned int>& indices,
                                          const double Rmax, const double Rmin, Batch& out) const
 {
+  if (&out.indices == &indices) {
+    const std::vector<unsigned int> copy(indices);
+    closeObjects(copy, Rmax, Rmin, out);
+    return;
+  }
+
   checkRadii(Rmax, Rmin);
 
   closeBatch(out, indices.size(), m_cells.size(),

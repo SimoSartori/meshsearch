@@ -2044,3 +2044,27 @@ def test_the_tour_example_runs():
     from pathlib import Path
     path = Path(__file__).resolve().parent.parent / "examples" / "example.py"
     runpy.run_path(str(path), run_name="__main__")
+
+
+# An out= array that is also the indices argument: the Python batches read
+# their indices into their own copy first, so the answer is the one a separate
+# array would receive. close_objects has no out=, so it cannot alias.
+
+
+def test_out_may_be_the_indices_array(grids):
+    grid = grids["matched"]
+    objects = np.arange(40, dtype=np.uint32)
+
+    same = objects.copy()
+    assert grid.nearest_object(same, out=same) is same
+    assert np.array_equal(same, grid.nearest_object(objects))
+
+    wide = np.zeros(40 * 3, dtype=np.uint32)
+    wide[:40] = objects
+    out = wide.reshape(40, 3)
+    assert grid.nearest_objects(3, wide[:40], out=out) is out
+    assert np.array_equal(out, grid.nearest_objects(3, objects))
+
+    counts = objects.astype(np.int64)
+    assert grid.count_objects(counts, 0.1, out=counts) is counts
+    assert np.array_equal(counts, grid.count_objects(objects, 0.1))
