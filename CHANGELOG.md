@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Radius queries (`closeObjects`, `countObjects`) skip in bulk the cells of
+  each shell that cannot hold a result, instead of testing them one by one.
+  The gain is largest at radii close to a multiple of the cell side.
+- Count and close queries with a radius of several cell sides accept or skip
+  whole cells without testing each object, where the cells are dense enough
+  for this to pay.
+- Large `closeObjects` batches build their output with less copying and less
+  memory; the gain is largest on clustered data.
+- With Clang, `nearestObject` is about twice as fast on clustered data and
+  slightly slower on uniform data; with GCC it is unchanged.
+
+Results and their order are unchanged by all of the above. Measured
+timings are in the benchmark page.
+
+### Fixed
+
+- An index batch may answer into the container holding its indices for every
+  batch form: `closeObjects(b.indices, R, b)` returned undefined results
+  before. Only `nearestObject` and `nearestObjects` allowed it.
+
+
 ## 0.3.0 — 2026-11-25
 
 ### Breaking
