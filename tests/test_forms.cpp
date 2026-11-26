@@ -354,6 +354,11 @@ namespace {
         MeshGrid::Batch out{stale(), Counts(3, 99)};
         g.closeObjects(c.qi, R, Rmin, out);
         assert(out.indices == expect.indices && out.offsets == expect.offsets);
+        // An index batch answered into the Batch that holds its indices: the
+        // header allows it, so the answer must be the separate one's.
+        MeshGrid::Batch same{c.qi, Counts(3, 99)};
+        g.closeObjects(same.indices, R, Rmin, same);
+        assert(same.indices == expect.indices && same.offsets == expect.offsets);
         if (Rmin == 0.) {
           MeshGrid::Batch ball{stale(), Counts(3, 99)};
           g.closeObjects(c.qi, R, ball);
@@ -487,6 +492,10 @@ namespace {
     MeshGrid::Batch out{Indices(7, 5), Counts(3, 99)};
     g.closeObjects(qi, Rmax, Rmin, out);
     assert(out.indices == expecti.indices && out.offsets == expecti.offsets);
+    // Same, aliased, on the path that answers in cell order.
+    MeshGrid::Batch same{qi, Counts(3, 99)};
+    g.closeObjects(same.indices, Rmax, Rmin, same);
+    assert(same.indices == expecti.indices && same.offsets == expecti.offsets);
   }
 
 }

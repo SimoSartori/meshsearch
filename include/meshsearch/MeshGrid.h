@@ -217,7 +217,9 @@ namespace meshsearch {
     /// As above, into @p out, the last argument, which is cleared first and
     /// keeps its capacity; its content is unspecified if the call throws, and
     /// no other thread may use it during the call. This holds for every
-    /// member taking @p out.
+    /// member taking @p out. When a batch of indices is given the
+    /// container it is answered into, the answer is the one a separate
+    /// container would receive; every index batch honours this.
     void nearestObject (const std::vector<double>& X,
                         const std::vector<double>& Y,
                         const std::vector<double>& Z,
@@ -398,7 +400,8 @@ namespace meshsearch {
                         double Rmax, double Rmin = 0.) const;
 
     /// The index batch of closeObjects, into @p out, whose indices and
-    /// offsets are both replaced; with Rmin, then with Rmin = 0.
+    /// offsets are both replaced; @p indices may be out.indices itself. With
+    /// Rmin, then with Rmin = 0.
     void closeObjects (const std::vector<unsigned int>& indices,
                        double Rmax, double Rmin, Batch& out) const;
     void closeObjects (const std::vector<unsigned int>& indices,
