@@ -552,7 +552,7 @@ unsigned int meshsearch::MeshGrid::nearestObjectPeriodic (double X, double Y, do
   walkPeriodic(target, X, Y, Z, 0., [&] { return min_dist_sq; },
                [&] (const size_t first, const size_t k, const double dist_sq) {
                  if (first+k == self) return;
-                 if (finalSlot == no_slot || dist_sq < min_dist_sq) {
+                 if (__builtin_expect(finalSlot == no_slot || dist_sq < min_dist_sq, 0)) {
                    min_dist_sq = dist_sq;
                    finalSlot = first+k;
                  }
@@ -712,7 +712,7 @@ unsigned int meshsearch::MeshGrid::nearestObject (const double X, const double Y
         const size_t first = block.start;
         scanBlock(m_X.data()+first, m_Y.data()+first, m_Z.data()+first, block.count, X, Y, Z,
                   [&] (const size_t k, const double dist_sq) {
-                    if (finalSlot == no_slot || dist_sq < min_dist_sq) {
+                    if (__builtin_expect(finalSlot == no_slot || dist_sq < min_dist_sq, 0)) {
                       min_dist_sq = dist_sq;
                       finalSlot = first+k;
                     }
@@ -773,7 +773,7 @@ unsigned int meshsearch::MeshGrid::nearestObject (const unsigned int index) cons
         scanBlock(m_X.data()+first, m_Y.data()+first, m_Z.data()+first, block.count, X, Y, Z,
                   [&] (const size_t k, const double dist_sq) {
                     if (first+k == self) return;
-                    if (finalSlot == no_slot || dist_sq < min_dist_sq) {
+                    if (__builtin_expect(finalSlot == no_slot || dist_sq < min_dist_sq, 0)) {
                       min_dist_sq = dist_sq;
                       finalSlot = first+k;
                     }
