@@ -593,6 +593,8 @@ namespace meshsearch {
                      double X, double Y, double Z, size_t self, double Rmax, double Rmin) const;
     void closeRulesPeriodic (std::vector<unsigned int>& out, const std::array<unsigned int, 3>& target,
                              double X, double Y, double Z, size_t self, double Rmax, double Rmin) const;
+    void closeAppend (std::vector<unsigned int>& out, double X, double Y, double Z, double Rmax, double Rmin,
+                      const unsigned int* index) const;
 
   };
 

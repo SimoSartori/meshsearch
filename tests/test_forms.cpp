@@ -461,6 +461,34 @@ namespace {
     }
   }
 
+  // A large batch, point and index forms, against the single queries
+  // concatenated in input order: same indices, same order, same offsets.
+  void checkLarge (const MeshGrid& g, const std::vector<double>& qx, const std::vector<double>& qy,
+                   const std::vector<double>& qz, const Indices& qi, const double Rmax, const double Rmin)
+  {
+    MeshGrid::Batch expect, expecti;
+    expect.offsets.push_back(0);
+    expecti.offsets.push_back(0);
+    Indices one;
+    for (size_t q=0; q<qx.size(); ++q) {
+      g.closeObjects(qx[q], qy[q], qz[q], Rmax, Rmin, one);
+      expect.indices.insert(expect.indices.end(), one.begin(), one.end());
+      expect.offsets.push_back(expect.indices.size());
+    }
+    for (const unsigned int i : qi) {
+      g.closeObjects(i, Rmax, Rmin, one);
+      expecti.indices.insert(expecti.indices.end(), one.begin(), one.end());
+      expecti.offsets.push_back(expecti.indices.size());
+    }
+    const MeshGrid::Batch b = g.closeObjects(qx, qy, qz, Rmax, Rmin);
+    assert(b.indices == expect.indices && b.offsets == expect.offsets);
+    const MeshGrid::Batch bi = g.closeObjects(qi, Rmax, Rmin);
+    assert(bi.indices == expecti.indices && bi.offsets == expecti.offsets);
+    MeshGrid::Batch out{Indices(7, 5), Counts(3, 99)};
+    g.closeObjects(qi, Rmax, Rmin, out);
+    assert(out.indices == expecti.indices && out.offsets == expecti.offsets);
+  }
+
 }
 
 
@@ -611,6 +639,86 @@ int main ()
     std::printf("  %-34s %6u objects, %5zu points, %5zu indices: ok\n",
                 c.name, g.get_nObjects(), nq, c.qi.size());
   }
+
+  // Large batches on every path a query can take. Each configuration below
+  // holds at least 100000 queries, the size from which the library answers
+  // a batch in an order of its own, and is checked in both forms.
+  //
+  // Sparse grid (whole-cell rules off), plain and periodic: both radius
+  // forms, a ball and a shell.
+  for (const bool periodic : {false, true}) {
+    MeshGrid::Options opt;
+    opt.limits = unit;
+    opt.periodic = {periodic, periodic, periodic};
+    std::vector<double> x, y, z, qx, qy, qz;
+    randomPoints(x, y, z, 30000, unit);
+    randomPoints(qx, qy, qz, 100000, unit);
+    Indices qi;
+    for (int i=0; i<100000; ++i) qi.push_back(unsigned(integer(0, 29999)));
+    const MeshGrid g(x, y, z, 0.03, opt);
+    checkLarge(g, qx, qy, qz, qi, 0.05, 0.);
+    checkLarge(g, qx, qy, qz, qi, 0.06, 0.02);
+  }
+  std::printf("  large batches, sparse grid:        ok\n");
+
+  // Dense grid at Rmax >= 12 cell sides, where whole cells are accepted or
+  // skipped without measuring each object. Cells are 1/8 of the unit box
+  // (an integer number, as a periodic axis requires), so the walk stays
+  // short. Objects come in 60 clumps of 5 inside single cells, so the grid
+  // is dense (at least 4 objects per occupied cell). From a query near a
+  // corner of the plain box, a ball of 12 cells leaves the far corner out,
+  // so clumps fall inside, across the sphere and outside; Rmin = 0.3 adds
+  // cells skipped wholly inside the inner sphere, on the periodic grid too.
+  for (const bool periodic : {false, true}) {
+    MeshGrid::Options opt;
+    opt.limits = unit;
+    opt.periodic = {periodic, periodic, periodic};
+    const double c = 1./8.;
+    std::vector<double> x, y, z, qx, qy, qz;
+    for (int k=0; k<60; ++k) {
+      const double cx = integer(0, 7)*c, cy = integer(0, 7)*c, cz = integer(0, 7)*c;
+      for (int m=0; m<5; ++m) {
+        x.push_back(cx+uniform(0.1, 0.9)*c);
+        y.push_back(cy+uniform(0.1, 0.9)*c);
+        z.push_back(cz+uniform(0.1, 0.9)*c);
+      }
+    }
+    randomPoints(qx, qy, qz, 100000, unit);
+    Indices qi;
+    for (int i=0; i<100000; ++i) qi.push_back(unsigned(integer(0, 299)));
+    const MeshGrid g(x, y, z, c, opt);
+    assert(g.get_cellsize() == c);
+    checkLarge(g, qx, qy, qz, qi, 12.*c, 0.);
+    checkLarge(g, qx, qy, qz, qi, inf, 0.3);
+  }
+  std::printf("  large batches, whole-cell rules:   ok\n");
+
+  // A batch whose results run to millions of indices, with single queries of
+  // 60000 results each among many small ones: 60000 objects packed in a cube
+  // of side 0.02 inside a sparse background, and 60 queries (points and
+  // objects) in that cube, spread through the batch, whose ball covers it.
+  // However the batch stores results internally, this exceeds any buffer of
+  // a few MiB, and single queries alone fill tens of thousands of entries.
+  {
+    std::vector<double> x, y, z, qx, qy, qz;
+    randomPoints(x, y, z, 20000, unit);
+    const Box blob = {{{0.49, 0.51}, {0.49, 0.51}, {0.49, 0.51}}};
+    randomPoints(x, y, z, 60000, blob);
+    randomPoints(qx, qy, qz, 120000, unit);
+    Indices qi;
+    for (int i=0; i<120000; ++i) qi.push_back(unsigned(integer(0, 19999)));
+    for (int k=0; k<60; ++k) {
+      const size_t at = size_t(integer(0, 119999));
+      qx[at] = uniform(0.495, 0.505);
+      qy[at] = uniform(0.495, 0.505);
+      qz[at] = uniform(0.495, 0.505);
+      qi[size_t(integer(0, 119999))] = unsigned(integer(20000, 79999));
+    }
+    const MeshGrid g(x, y, z, 0.01, MeshGrid::Options{unit, {}});
+    checkLarge(g, qx, qy, qz, qi, 0.05, 0.);
+    checkLarge(g, qx, qy, qz, qi, 0.05, 0.001);
+  }
+  std::printf("  large batches, very large results: ok\n");
 
   // The caller's container keeps its storage: a container-first call clears
   // it and refills it in place, so a buffer large enough for the result is
