@@ -1,6 +1,14 @@
 #ifndef MESHSEARCH_MESHGRIDWALK_H
 #define MESHSEARCH_MESHGRIDWALK_H
 
+#if defined(__GNUC__) && !defined(__clang__)
+#define MESHSEARCH_ALWAYS_INLINE [[gnu::always_inline]]
+#define MESHSEARCH_NOINLINE [[gnu::noinline]]
+#else
+#define MESHSEARCH_ALWAYS_INLINE
+#define MESHSEARCH_NOINLINE
+#endif
+
 #include "meshsearch/MeshGrid.h"
 
 #include <algorithm>
@@ -30,7 +38,7 @@ namespace {
   const size_t no_slot = std::numeric_limits<size_t>::max();
 
   template <class Visit>
-  void scanBlock (const double* x, const double* y, const double* z, const size_t n,
+  MESHSEARCH_ALWAYS_INLINE inline void scanBlock (const double* x, const double* y, const double* z, const size_t n,
                   const double X, const double Y, const double Z, Visit&& visit)
   {
     double dist_sq[scan_chunk];
@@ -50,7 +58,7 @@ namespace {
   }
 
   template <class Visit>
-  void scanShifted (const double* x, const double* y, const double* z, const size_t n,
+  MESHSEARCH_ALWAYS_INLINE inline void scanShifted (const double* x, const double* y, const double* z, const size_t n,
                     const double X, const double Y, const double Z,
                     const double sx, const double sy, const double sz, Visit&& visit)
   {
@@ -70,7 +78,7 @@ namespace {
     }
   }
 
-  double minimumImage (const double d, const double period, const double half)
+  MESHSEARCH_ALWAYS_INLINE inline double minimumImage (const double d, const double period, const double half)
   {
     if (d >= half) return d-period;
     if (d < -half) return d+period;
@@ -78,7 +86,7 @@ namespace {
   }
 
   template <class Visit>
-  void scanImages (const double* x, const double* y, const double* z, const size_t n,
+  MESHSEARCH_ALWAYS_INLINE inline void scanImages (const double* x, const double* y, const double* z, const size_t n,
                    const double X, const double Y, const double Z,
                    const double* period, const double* half, Visit&& visit)
   {
@@ -92,7 +100,7 @@ namespace {
 
   using Lims = std::array<std::array<double,2>,3>;
 
-  std::array<unsigned int, 3> locate (const Lims& lims,
+  MESHSEARCH_NOINLINE std::array<unsigned int, 3> locate (const Lims& lims,
                                       const std::array<unsigned int, 3>& nCells,
                                       const double cellsize,
                                       const double X, const double Y, const double Z)
@@ -117,13 +125,13 @@ namespace {
     return coords;
   }
 
-  void checkIndex (const std::vector<char>& alive, const unsigned int index)
+  MESHSEARCH_NOINLINE void checkIndex (const std::vector<char>& alive, const unsigned int index)
   {
     if (index >= alive.size()) throw meshsearch::IndexError("object index out of range");
     if (alive[index] == 0) throw meshsearch::IndexError("object index has been removed");
   }
 
-  void checkRadii (const double Rmax, const double Rmin)
+  MESHSEARCH_NOINLINE void checkRadii (const double Rmax, const double Rmin)
   {
     if (std::isnan(Rmax) || std::isnan(Rmin)) throw meshsearch::Error("a radius is NaN");
     if (Rmax < 0.) throw meshsearch::Error("Rmax < 0");
@@ -131,19 +139,19 @@ namespace {
     if (Rmax < Rmin) throw meshsearch::Error("Rmax < Rmin");
   }
 
-  bool exceeds (const double bound_sq, const double threshold)
+  MESHSEARCH_ALWAYS_INLINE inline bool exceeds (const double bound_sq, const double threshold)
   {
     return bound_sq >= tiny_sq && threshold <= huge_sq && bound_sq > threshold;
   }
 
-  bool shellBeyond (const unsigned int shell, const double cellsize, const double threshold)
+  MESHSEARCH_ALWAYS_INLINE inline bool shellBeyond (const unsigned int shell, const double cellsize, const double threshold)
   {
     if (shell == 0) return false;
     const double reach = shell*cellsize;
     return exceeds((reach*reach)*stop_factor, threshold);
   }
 
-  bool shellBeyondPeriodic (const unsigned int shell, const double cellsize, const double slack, const double threshold)
+  MESHSEARCH_ALWAYS_INLINE inline bool shellBeyondPeriodic (const unsigned int shell, const double cellsize, const double slack, const double threshold)
   {
     if (shell == 0) return false;
     const double cells = double(shell);
@@ -158,7 +166,7 @@ namespace {
     double cellsize;
   };
 
-  CellFaces cellFaces (const Lims& lims,
+  MESHSEARCH_ALWAYS_INLINE inline CellFaces cellFaces (const Lims& lims,
                        const std::array<unsigned int, 3>& nCells,
                        const double cellsize)
   {
@@ -172,7 +180,7 @@ namespace {
     return faces;
   }
 
-  CellFaces periodicFaces (const Lims& lims,
+  MESHSEARCH_NOINLINE CellFaces periodicFaces (const Lims& lims,
                            const std::array<unsigned int, 3>& nCells,
                            const double cellsize,
                            const std::array<bool, 3>& periodic,
@@ -187,7 +195,7 @@ namespace {
     return faces;
   }
 
-  double axisGap (const CellFaces& faces, const int axis, const std::int64_t cell, const double q)
+  MESHSEARCH_ALWAYS_INLINE inline double axisGap (const CellFaces& faces, const int axis, const std::int64_t cell, const double q)
   {
     const double lower = faces.lo[axis]+double(cell)*faces.cellsize;
     const double upper = faces.lo[axis]+double(cell+1)*faces.cellsize;
@@ -196,7 +204,7 @@ namespace {
     return (padded > 0.) ? padded : 0.;
   }
 
-  bool cellBeyond (const CellFaces& faces, const std::int64_t cx, const std::int64_t cy, const std::int64_t cz,
+  MESHSEARCH_NOINLINE bool cellBeyond (const CellFaces& faces, const std::int64_t cx, const std::int64_t cy, const std::int64_t cz,
                    const double X, const double Y, const double Z, const double threshold)
   {
     if (!(threshold <= huge_sq)) return false;
@@ -207,7 +215,7 @@ namespace {
     return bound_sq >= tiny_sq && bound_sq*skip_factor > threshold;
   }
 
-  unsigned int firstShell (const CellFaces& faces, const size_t nShells, const double Rmin, const double Rmin_sq)
+  MESHSEARCH_NOINLINE unsigned int firstShell (const CellFaces& faces, const size_t nShells, const double Rmin, const double Rmin_sq)
   {
     if (!(Rmin_sq >= tiny_sq)) return 0;
 
@@ -223,7 +231,7 @@ namespace {
     return (start < double(nShells)) ? static_cast<unsigned int>(start) : static_cast<unsigned int>(nShells);
   }
 
-  bool axisBeyond (const CellFaces& faces, const int axis, const std::int64_t cell, const double q, const double threshold)
+  MESHSEARCH_ALWAYS_INLINE inline bool axisBeyond (const CellFaces& faces, const int axis, const std::int64_t cell, const double q, const double threshold)
   {
     const double gap = axisGap(faces, axis, cell, q);
     const double gap_sq = gap*gap;
@@ -234,7 +242,7 @@ namespace {
   public:
     std::int64_t lo[3], hi[3];
 
-    StepWindow (const CellFaces& faces, const std::int64_t* target, const double X, const double Y, const double Z,
+    MESHSEARCH_ALWAYS_INLINE StepWindow (const CellFaces& faces, const std::int64_t* target, const double X, const double Y, const double Z,
                 const std::int64_t* first, const std::int64_t* last)
       : m_faces(faces)
     {
@@ -248,7 +256,7 @@ namespace {
       }
     }
 
-    void update (const double threshold, const bool reach)
+    MESHSEARCH_NOINLINE void update (const double threshold, const bool reach)
     {
       if (m_set && threshold == m_threshold && reach == m_reach) return;
       m_set = true;
@@ -264,7 +272,7 @@ namespace {
     }
 
   private:
-    void axisRange (const int a, const double threshold, std::int64_t& l, std::int64_t& h) const
+    MESHSEARCH_ALWAYS_INLINE void axisRange (const int a, const double threshold, std::int64_t& l, std::int64_t& h) const
     {
       const std::int64_t t = m_target[a];
       const double q = m_q[a];
@@ -289,7 +297,7 @@ namespace {
     bool m_set = false;
   };
 
-  StepWindow plainWindow (const CellFaces& faces, const std::array<unsigned int, 3>& target,
+  MESHSEARCH_NOINLINE StepWindow plainWindow (const CellFaces& faces, const std::array<unsigned int, 3>& target,
                           const std::array<unsigned int, 3>& nCells, const double X, const double Y, const double Z)
   {
     const std::int64_t where[3] = {target[0], target[1], target[2]};
@@ -305,7 +313,7 @@ namespace {
     const Offset* begin = nullptr;
     const Offset* end = nullptr;
 
-    ShellSegments (const std::vector<Offset>& shell, const std::vector<size_t>& runs, const StepWindow& w,
+    MESHSEARCH_NOINLINE ShellSegments (const std::vector<Offset>& shell, const std::vector<size_t>& runs, const StepWindow& w,
                    const unsigned int shellIndex)
       : m_e(shell.data()), m_runs(runs.data()), m_nRuns(runs.size()-1),
         m_ihi(w.hi[0]), m_jlo(w.lo[1]), m_jhi(w.hi[1]), m_klo(w.lo[2]), m_khi(w.hi[2])
@@ -324,7 +332,7 @@ namespace {
       m_run = a;
     }
 
-    bool next ()
+    MESHSEARCH_ALWAYS_INLINE bool next ()
     {
       if (m_whole) {
         if (m_run > 0 || m_nRuns == 0) return false;
@@ -362,7 +370,7 @@ namespace {
       return false;
     }
 
-    bool holds (const Offset& entry) const
+    MESHSEARCH_ALWAYS_INLINE bool holds (const Offset& entry) const
     {
       return entry.k >= m_klo && entry.k <= m_khi;
     }
