@@ -2068,3 +2068,150 @@ def test_out_may_be_the_indices_array(grids):
     counts = objects.astype(np.int64)
     assert grid.count_objects(counts, 0.1, out=counts) is counts
     assert np.array_equal(counts, grid.count_objects(objects, 0.1))
+
+
+# --------------------------------------------------------------------------
+# workers=: the batch forms may run on several threads; the results do not
+# depend on how many, in content or order. A batch is split only when it is
+# large enough for every thread to get some work, so these batches hold
+# thousands of queries; the C++ suite checks the paths in detail.
+
+WORKERS = (2, 3, 7, -1)
+
+
+@pytest.fixture(scope="module")
+def worker_grids(points):
+    X, Y, Z = points
+    return {"plain": meshsearch.MeshGrid(X, Y, Z, MPS, limits=BOX),
+            "periodic": meshsearch.MeshGrid(X, Y, Z, 0.125, limits=BOX, periodic=True)}
+
+
+def batch_results(grid, qx, qy, qz, objects, **kw):
+    """Every batch form, returning and with out=, as a flat list of arrays."""
+    n = len(qx)
+    found = [grid.nearest_object(qx, qy, qz, **kw), grid.nearest_object(objects, **kw),
+             grid.nearest_objects(5, qx, qy, qz, **kw), grid.nearest_objects(5, objects, **kw),
+             grid.count_objects(qx, qy, qz, 0.08, **kw), grid.count_objects(objects, 0.08, 0.02, **kw)]
+    found += list(grid.close_objects(qx, qy, qz, 0.08, **kw))
+    found += list(grid.close_objects(objects, 0.08, 0.02, **kw))
+    out = [np.zeros(n, np.uint32), np.zeros(len(objects), np.uint32), np.zeros((n, 5), np.uint32),
+           np.zeros(n, np.int64), np.zeros(len(objects), np.int64)]
+    grid.nearest_object(qx, qy, qz, out=out[0], **kw)
+    grid.nearest_object(objects, out=out[1], **kw)
+    grid.nearest_objects(5, qx, qy, qz, out=out[2], **kw)
+    grid.count_objects(qx, qy, qz, 0.08, out=out[3], **kw)
+    grid.count_objects(objects, 0.08, 0.02, out=out[4], **kw)
+    return found + out
+
+
+@pytest.mark.parametrize("kind", ["plain", "periodic"])
+def test_workers_change_no_result(worker_grids, kind):
+    grid = worker_grids[kind]
+    qx, qy, qz = cloud(5000, seed=33)
+    objects = np.random.default_rng(34).integers(0, len(grid), 5000)
+    expected = batch_results(grid, qx, qy, qz, objects)
+    assert all(np.array_equal(a, b) for a, b in zip(expected, batch_results(grid, qx, qy, qz, objects, workers=1)))
+    for workers in WORKERS:
+        got = batch_results(grid, qx, qy, qz, objects, workers=workers)
+        assert len(got) == len(expected)
+        for a, b in zip(expected, got):
+            assert a.dtype == b.dtype and np.array_equal(a, b)
+
+
+def test_workers_change_no_result_in_a_large_batch(worker_grids):
+    # From 100000 queries a batch answers in cell order, and an index batch is
+    # grouped by cell; neither depends on the number of workers either.
+    grid = worker_grids["plain"]
+    objects = np.random.default_rng(35).integers(0, len(grid), 110_000)
+    qx, qy, qz = cloud(110_000, seed=36)
+    expected = [grid.count_objects(objects, 0.06), *grid.close_objects(objects, 0.06),
+                grid.nearest_objects(4, qx, qy, qz), *grid.close_objects(qx, qy, qz, 0.05)]
+    for workers in (3, -1):
+        got = [grid.count_objects(objects, 0.06, workers=workers), *grid.close_objects(objects, 0.06, workers=workers),
+               grid.nearest_objects(4, qx, qy, qz, workers=workers),
+               *grid.close_objects(qx, qy, qz, 0.05, workers=workers)]
+        assert all(np.array_equal(a, b) for a, b in zip(expected, got))
+
+
+def test_workers_is_keyword_only(worker_grids):
+    grid = worker_grids["plain"]
+    qx, qy, qz = cloud(600, seed=37)
+    objects = np.arange(600)
+    with pytest.raises(TypeError):
+        grid.close_objects(qx, qy, qz, 0.1, 0.0, 2)
+    with pytest.raises(TypeError):
+        grid.count_objects(objects, 0.1, 0.0, None, 2)
+    with pytest.raises(TypeError):
+        grid.nearest_object(qx, qy, qz, None, 2)
+    with pytest.raises(TypeError):
+        grid.nearest_objects(3, objects, None, 2)
+
+
+def test_single_queries_take_no_workers(worker_grids):
+    grid = worker_grids["plain"]
+    with pytest.raises(TypeError):
+        grid.nearest_object(0.5, 0.5, 0.5, workers=2)
+    with pytest.raises(TypeError):
+        grid.nearest_objects(3, 7, workers=2)
+    with pytest.raises(TypeError):
+        grid.close_objects(7, 0.1, workers=2)
+    with pytest.raises(TypeError):
+        grid.count_objects(0.5, 0.5, 0.5, 0.1, workers=2)
+    with pytest.raises(TypeError):
+        grid.is_alive(np.arange(10), workers=2)
+    with pytest.raises(TypeError):
+        grid.contains(*cloud(10), workers=2)
+
+
+@pytest.mark.parametrize("bad", [0, -2, -3, -(2 ** 31), -(10 ** 30)])
+def test_workers_below_one_other_than_minus_one_raise(worker_grids, bad):
+    grid = worker_grids["plain"]
+    qx, qy, qz = cloud(600, seed=38)
+    objects = np.arange(600)
+    calls = [lambda: grid.nearest_object(qx, qy, qz, workers=bad),
+             lambda: grid.nearest_object(objects, workers=bad),
+             lambda: grid.nearest_objects(2, qx, qy, qz, workers=bad),
+             lambda: grid.nearest_objects(2, objects, workers=bad),
+             lambda: grid.close_objects(qx, qy, qz, 0.1, workers=bad),
+             lambda: grid.close_objects(objects, 0.1, workers=bad),
+             lambda: grid.count_objects(qx, qy, qz, 0.1, workers=bad),
+             lambda: grid.count_objects(objects, 0.1, workers=bad)]
+    for call in calls:
+        with pytest.raises(meshsearch.Error) as raised:
+            call()
+        assert not isinstance(raised.value, meshsearch.IndexError)
+
+
+@pytest.mark.parametrize("bad", [2.0, "2", None, [2]])
+def test_workers_must_be_an_integer(worker_grids, bad):
+    grid = worker_grids["plain"]
+    qx, qy, qz = cloud(600, seed=39)
+    with pytest.raises(TypeError):
+        grid.close_objects(qx, qy, qz, 0.1, workers=bad)
+    with pytest.raises(TypeError):
+        grid.count_objects(np.arange(600), 0.1, workers=bad)
+
+
+def test_more_workers_than_cores_are_allowed(worker_grids):
+    grid = worker_grids["plain"]
+    qx, qy, qz = cloud(3000, seed=40)
+    expected = grid.count_objects(qx, qy, qz, 0.1)
+    for workers in (4 * (os.cpu_count() or 1), 2 ** 31 - 1, 10 ** 30, np.int64(5)):
+        assert np.array_equal(grid.count_objects(qx, qy, qz, 0.1, workers=workers), expected)
+
+
+def test_a_batch_with_workers_raises_naming_the_first_bad_query(worker_grids):
+    grid = worker_grids["plain"]
+    qx, qy, qz = cloud(3000, seed=41)
+    qx[1700] = 2.0
+    qz[900] = -1.0
+    for workers in (1, 2, 7, -1):
+        with pytest.raises(meshsearch.Error, match="query 900"):
+            grid.count_objects(qx, qy, qz, 0.1, workers=workers)
+        with pytest.raises(meshsearch.Error, match="query 900"):
+            grid.close_objects(qx, qy, qz, 0.1, workers=workers)
+    objects = np.arange(3000, dtype=np.int64) % len(grid)
+    objects[2500] = len(grid) + 5
+    for workers in (1, 3, -1):
+        with pytest.raises(meshsearch.IndexError, match="query 2500"):
+            grid.nearest_object(objects, workers=workers)
