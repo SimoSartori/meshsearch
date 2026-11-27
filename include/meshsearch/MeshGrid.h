@@ -169,6 +169,53 @@ namespace meshsearch {
               const std::vector<double>& Z,
               double cellsize);
 
+    /**
+     *  @brief Build the grid from three arrays of coordinates.
+     *  @param X,Y,Z arrays of @p n coordinates each, read during the call
+     *    only: the grid copies them and keeps no reference to them
+     *  @param n number of points; with 0, the pointers may be null
+     *  @param cellsize as for the vector form
+     *  @param opt as for the vector form
+     *  @throw Error if @p n > 0 and a pointer is null; otherwise as the
+     *    vector form
+     *
+     *  For coordinates held in arrays that are not std::vector, such as a
+     *  buffer from another library, without copying them into vectors
+     *  first. Point i is (X[i], Y[i], Z[i]) and is object i; the grid is
+     *  the one the vector form builds from the same values, with the same
+     *  results in the same order.
+     */
+    MeshGrid (const double* X, const double* Y, const double* Z,
+              std::size_t n, double cellsize, const Options& opt);
+
+    /// As above with default Options: the box fitted to the data, no
+    /// periodic axis.
+    MeshGrid (const double* X, const double* Y, const double* Z,
+              std::size_t n, double cellsize);
+
+    /**
+     *  @brief Build the grid from one array of interleaved coordinates.
+     *  @param XYZ array of 3*@p n coordinates, x0 y0 z0 x1 y1 z1 ..., read
+     *    during the call only: the grid copies them and keeps no reference
+     *    to them
+     *  @param n number of points; with 0, the pointer may be null
+     *  @param cellsize as for the vector form
+     *  @param opt as for the vector form
+     *  @throw Error if @p n > 0 and the pointer is null; otherwise as the
+     *    vector form, a non-finite coordinate being named by its axis and
+     *    its point
+     *
+     *  For points stored as rows of three, such as a C-ordered n x 3
+     *  array. Point i is (XYZ[3i], XYZ[3i+1], XYZ[3i+2]) and is object i;
+     *  the grid is the one the vector form builds from the same values,
+     *  with the same results in the same order.
+     */
+    MeshGrid (const double* XYZ, std::size_t n, double cellsize, const Options& opt);
+
+    /// As above with default Options: the box fitted to the data, no
+    /// periodic axis.
+    MeshGrid (const double* XYZ, std::size_t n, double cellsize);
+
     /// Number of objects in the grid, excluding removed ones.
     unsigned int get_nObjects () const;
 
@@ -605,6 +652,9 @@ namespace meshsearch {
     size_t m_occupied = 0;
     double m_countFrom = 0.;
     double m_closeFrom = 0.;
+
+    void build (const double* X, const double* Y, const double* Z, std::size_t stride, std::size_t n,
+                double cellsize, const Options& opt);
 
     size_t getLinearIndex (unsigned int ix, unsigned int iy, unsigned int iz) const;
 

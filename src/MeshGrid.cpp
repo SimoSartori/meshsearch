@@ -142,18 +142,90 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
 {
   if (X.size() != Y.size() || X.size() != Z.size())
     throw Error("the coordinate vectors differ in length");
+  build(X.data(), Y.data(), Z.data(), 1, X.size(), cellsize, opt);
+}
+
+
+// ===========================================================================
+
+
+meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
+                                const std::vector<double>& Y,
+                                const std::vector<double>& Z,
+                                const double cellsize)
+  : MeshGrid(X, Y, Z, cellsize, Options())
+{}
+
+
+// ===========================================================================
+
+
+meshsearch::MeshGrid::MeshGrid (const double* const X, const double* const Y, const double* const Z,
+                                const std::size_t n, const double cellsize, const Options& opt)
+{
+  if (n > 0 && (X == nullptr || Y == nullptr || Z == nullptr))
+    throw Error("a coordinate array is a null pointer");
+  build(X, Y, Z, 1, n, cellsize, opt);
+}
+
+
+// ===========================================================================
+
+
+meshsearch::MeshGrid::MeshGrid (const double* const X, const double* const Y, const double* const Z,
+                                const std::size_t n, const double cellsize)
+  : MeshGrid(X, Y, Z, n, cellsize, Options())
+{}
+
+
+// ===========================================================================
+
+
+meshsearch::MeshGrid::MeshGrid (const double* const XYZ, const std::size_t n, const double cellsize,
+                                const Options& opt)
+{
+  if (n > 0 && XYZ == nullptr)
+    throw Error("the coordinate array is a null pointer");
+  build(XYZ, n > 0 ? XYZ+1 : XYZ, n > 0 ? XYZ+2 : XYZ, 3, n, cellsize, opt);
+}
+
+
+// ===========================================================================
+
+
+meshsearch::MeshGrid::MeshGrid (const double* const XYZ, const std::size_t n, const double cellsize)
+  : MeshGrid(XYZ, n, cellsize, Options())
+{}
+
+
+// ===========================================================================
+
+
+void meshsearch::MeshGrid::build (const double* const X, const double* const Y, const double* const Z,
+                                  const size_t stride, const size_t n, const double cellsize, const Options& opt)
+{
   if (!(std::isfinite(cellsize) && cellsize > 0.))
     throw Error("cellsize must be positive and finite");
   if (!std::isfinite(1./cellsize))
     throw Error("cellsize is too small: its reciprocal overflows a double");
-  if (X.size() > max_objects)
+  if (n > max_objects)
     throw Error("too many objects: at most 4294967295 are supported");
 
-  const std::vector<double>* axes[3] = {&X, &Y, &Z};
-  for (int i=0; i<3; ++i)
-    for (size_t k=0; k<axes[i]->size(); ++k)
-      if (!std::isfinite((*axes[i])[k]))
+  const double* const axes[3] = {X, Y, Z};
+  double low[3] = {0., 0., 0.}, high[3] = {0., 0., 0.};
+  for (int i=0; i<3 && n > 0; ++i) {
+    const double* const p = axes[i];
+    double lo_i = p[0], hi_i = p[0];
+    for (size_t k=0; k<n; ++k) {
+      const double v = p[k*stride];
+      if (!std::isfinite(v))
         throw Error(std::string(axis_names[i])+" coordinate "+std::to_string(k)+" is not finite");
+      if (v < lo_i) lo_i = v;
+      if (!(v < hi_i)) hi_i = v;
+    }
+    low[i] = lo_i;
+    high[i] = hi_i;
+  }
 
   const bool any_periodic = opt.periodic[0] || opt.periodic[1] || opt.periodic[2];
 
@@ -162,14 +234,13 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
   if (!opt.limits) {
     if (any_periodic)
       throw Error("periodic axes require explicit limits");
-    if (X.empty())
+    if (n == 0)
       throw Error("an empty set of coordinates requires explicit limits");
 
     for (int i=0; i<3; ++i) {
-      const auto range = std::minmax_element(axes[i]->begin(), axes[i]->end());
-      const double pad = padding_factor*(*range.second-*range.first);
-      lo[i] = *range.first-pad;
-      hi[i] = *range.second+pad;
+      const double pad = padding_factor*(high[i]-low[i]);
+      lo[i] = low[i]-pad;
+      hi[i] = high[i]+pad;
     }
   }
   else {
@@ -182,12 +253,10 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
         throw Error(std::string(axis_names[i])+" limits are inverted (lo > hi)");
     }
 
-    if (!X.empty()) {
-      for (int i=0; i<3; ++i) {
-        const auto range = std::minmax_element(axes[i]->begin(), axes[i]->end());
-        if (*range.first < limits[i][0] || *range.second > limits[i][1])
+    if (n > 0) {
+      for (int i=0; i<3; ++i)
+        if (low[i] < limits[i][0] || high[i] > limits[i][1])
           throw Error(std::string(axis_names[i])+" coordinate outside the limits");
-      }
     }
 
     for (int i=0; i<3; ++i) {
@@ -377,14 +446,14 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
   const size_t total_cells = static_cast<size_t>(total);
   m_cells.assign(total_cells, CellBlock{0, 0, 0});
 
-  const size_t n = X.size();
-
-  std::vector<size_t> cell(n);
+  m_toInternal.resize(n);
 
   for (size_t i=0; i<n; ++i) {
-    const auto coords = locate(m_lims, m_nCells, m_cellsize, X[i], Y[i], Z[i]);
-    cell[i] = getLinearIndex(coords[0], coords[1], coords[2]);
-    m_cells[cell[i]].cap++;
+    const size_t at = i*stride;
+    const auto coords = locate(m_lims, m_nCells, m_cellsize, X[at], Y[at], Z[at]);
+    const size_t cell = getLinearIndex(coords[0], coords[1], coords[2]);
+    m_toInternal[i] = cell;
+    m_cells[cell].cap++;
   }
 
   size_t start = 0;
@@ -397,14 +466,14 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
   m_Y.resize(n);
   m_Z.resize(n);
   m_toPublic.resize(n);
-  m_toInternal.resize(n);
 
   for (size_t i=0; i<n; ++i) {
-    CellBlock& block = m_cells[cell[i]];
+    CellBlock& block = m_cells[m_toInternal[i]];
     const size_t slot = block.start+block.count++;
-    m_X[slot] = X[i];
-    m_Y[slot] = Y[i];
-    m_Z[slot] = Z[i];
+    const size_t at = i*stride;
+    m_X[slot] = X[at];
+    m_Y[slot] = Y[at];
+    m_Z[slot] = Z[at];
     m_toPublic[slot] = static_cast<unsigned int>(i);
     m_toInternal[i] = slot;
   }
@@ -413,17 +482,6 @@ meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
   m_nObjects = static_cast<unsigned int>(n);
   wholeCount();
 }
-
-
-// ===========================================================================
-
-
-meshsearch::MeshGrid::MeshGrid (const std::vector<double>& X,
-                                const std::vector<double>& Y,
-                                const std::vector<double>& Z,
-                                const double cellsize)
-  : MeshGrid(X, Y, Z, cellsize, Options())
-{}
 
 
 // ===========================================================================
