@@ -14,6 +14,13 @@ The grid
    :project: meshsearch
    :members:
 
+Workers
+-------
+
+.. doxygenstruct:: meshsearch::Workers
+   :project: meshsearch
+   :members:
+
 Errors
 ------
 
