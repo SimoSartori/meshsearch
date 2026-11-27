@@ -2406,20 +2406,43 @@ def test_no_points_with_limits_build_an_empty_grid():
 
 @pytest.mark.parametrize("bad", [
     np.zeros(30), np.zeros((10, 2)), np.zeros((10, 4)), np.zeros((3, 10)), np.zeros((10, 3, 1)),
-    np.float64(1.0), 1.0, None, "abc", [[1.0, 2.0]] * 4, [[1.0, 2.0, 3.0], [1.0, 2.0]],
+    np.float64(1.0), 1.0, [[1.0, 2.0]] * 4, [1, 2, 3], np.zeros((10, 2), dtype=np.int32),
+], ids=lambda b: type(b).__name__ + str(getattr(b, "shape", "")))
+def test_pos_of_real_numbers_not_of_shape_n_by_3_raises_error(bad):
+    """A wrong shape is meshsearch.Error, as in C++ and in the batch forms,
+    and not a TypeError."""
+    with pytest.raises(meshsearch.Error) as raised:
+        meshsearch.MeshGrid(bad, 0.2, limits=BOX)
+    assert not isinstance(raised.value, TypeError)
+
+
+@pytest.mark.parametrize("bad", [
+    None, "abc", [[1.0, 2.0, 3.0], [1.0, 2.0]],
     np.array([["1", "2", "3"]]), np.zeros((4, 3), dtype="datetime64[s]"),
 ], ids=lambda b: type(b).__name__ + str(getattr(b, "shape", "")))
-def test_pos_that_is_not_n_by_3_real_numbers_raises_type_error(bad):
+def test_pos_that_is_not_real_numbers_raises_type_error(bad):
     with pytest.raises(TypeError):
         meshsearch.MeshGrid(bad, 0.2, limits=BOX)
 
 
 @pytest.mark.parametrize("bad", [
-    np.zeros((10, 1)), np.zeros((10, 3)), np.float64(1.0), 1.0, None, "abc", ["1"] * 10,
-    np.arange(10).astype("datetime64[s]"), (v for v in range(10)),
+    np.zeros((10, 1)), np.zeros((10, 3)), np.float64(1.0), 1.0, [[1.0, 2.0]] * 3,
+    np.zeros((2, 2), dtype=np.int64),
 ], ids=lambda b: type(b).__name__ + str(getattr(b, "shape", "")))
-def test_separate_arrays_that_are_not_one_dimensional_reals_raise_type_error(bad):
-    """As they always have: these are the cases the sequence conversion refuses.
+def test_separate_arrays_of_real_numbers_not_one_dimensional_raise_error(bad):
+    """A wrong shape is meshsearch.Error, whatever the argument and its type."""
+    ok = np.zeros(10)
+    for args in ((bad, ok, ok), (ok, bad, ok), (ok, ok, bad)):
+        with pytest.raises(meshsearch.Error) as raised:
+            meshsearch.MeshGrid(*args, 0.2, limits=BOX)
+        assert not isinstance(raised.value, TypeError)
+
+
+@pytest.mark.parametrize("bad", [
+    None, "abc", ["1"] * 10, np.arange(10).astype("datetime64[s]"), (v for v in range(10)),
+], ids=lambda b: type(b).__name__ + str(getattr(b, "shape", "")))
+def test_separate_arrays_that_are_not_real_numbers_raise_type_error(bad):
+    """The cases the sequence conversion refuses, as they always were.
     Complex numbers are not among them: they are converted, with numpy's
     ComplexWarning, as they always were."""
     ok = np.zeros(10)

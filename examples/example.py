@@ -36,6 +36,20 @@ for axis, (lo, hi) in zip("xyz", grid.lims):
     print(f"  {axis} [{lo:.4f}, {hi:.4f}]")
 print()
 
+# The same points as one array of shape (N, 3), a row per object. A float64
+# C-contiguous array, as here, is read where it is, without a copy; anything
+# else is converted first. Pass the array whole: its columns are strided, and
+# slicing them out costs a copy each. Either form builds the same grid, with
+# the same results in the same order.
+pos = np.column_stack((x, y, z))
+from_rows = meshsearch.MeshGrid(pos, cellsize, limits=limits)
+assert from_rows.n_cells == grid.n_cells
+assert np.array_equal(from_rows.nearest_objects(10, 0.5, 0.5, 0.5),
+                      grid.nearest_objects(10, 0.5, 0.5, 0.5))
+assert np.array_equal(from_rows.close_objects(0.5, 0.5, 0.5, 0.15, 0.10),
+                      grid.close_objects(0.5, 0.5, 0.5, 0.15, 0.10))
+print("the (N, 3) array builds the same grid\n")
+
 nearest = grid.nearest_object(0.5, 0.5, 0.5)
 print(f"nearest to the box centre: object {nearest} at "
       f"({x[nearest]:.4f}, {y[nearest]:.4f}, {z[nearest]:.4f})")
