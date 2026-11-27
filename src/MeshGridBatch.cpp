@@ -2,12 +2,21 @@
 #include "MeshGridWhole.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <deque>
+#include <exception>
 #include <limits>
+#include <mutex>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+#ifdef __linux__
+#include <sched.h>
+#endif
 
 namespace {
 
@@ -17,13 +26,13 @@ namespace {
 
   const size_t chunk_margin = size_t(1) << 15;
 
-  template <class Key, class Run>
-  void runQueries (const size_t n, const size_t nCells, Key&& key, Run&& run)
+  const size_t thread_min = 256;
+
+  const size_t thread_block = 64;
+
+  template <class Key>
+  std::vector<size_t> cellOrder (const size_t n, const size_t nCells, Key&& key)
   {
-    if (n < cell_order_min || nCells == 0) {
-      for (size_t i=0; i<n; ++i) run(i);
-      return;
-    }
     const size_t width = nCells/n+1;
     const size_t nBuckets = nCells/width+1;
     std::vector<size_t> bucket(n);
@@ -35,7 +44,147 @@ namespace {
     for (size_t b=0; b<nBuckets; ++b) start[b+1] += start[b];
     std::vector<size_t> order(n);
     for (size_t i=0; i<n; ++i) order[start[bucket[i]]++] = i;
-    for (const size_t i : order) run(i);
+    return order;
+  }
+
+  template <class Key, class Run>
+  void runQueries (const size_t n, const size_t nCells, Key&& key, Run&& run)
+  {
+    if (n < cell_order_min || nCells == 0) {
+      for (size_t i=0; i<n; ++i) run(i);
+      return;
+    }
+    for (const size_t i : cellOrder(n, nCells, key)) run(i);
+  }
+
+  size_t available ()
+  {
+#ifdef __linux__
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    if (sched_getaffinity(0, sizeof(set), &set) == 0 && CPU_COUNT(&set) > 0) return size_t(CPU_COUNT(&set));
+#endif
+    const unsigned int cores = std::thread::hardware_concurrency();
+    return cores > 0 ? cores : 1;
+  }
+
+  [[gnu::noinline]] size_t threadsFor (const meshsearch::Workers workers, const size_t n)
+  {
+    if (workers.get_count() == 1 || n < 2*thread_min) return 1;
+    const size_t asked = workers.get_count() == -1 ? available() : size_t(workers.get_count());
+    return std::max<size_t>(1, std::min(asked, n/thread_min));
+  }
+
+  template <class Body>
+  void together (const size_t threads, Body&& body)
+  {
+    std::atomic<bool> failed(false);
+    std::exception_ptr error;
+    std::mutex lock;
+    auto guarded = [&] () {
+      try {
+        body(failed);
+      }
+      catch (...) {
+        const std::lock_guard<std::mutex> hold(lock);
+        if (!error) error = std::current_exception();
+        failed.store(true, std::memory_order_relaxed);
+      }
+    };
+    std::vector<std::thread> pool;
+    try {
+      pool.reserve(threads-1);
+      for (size_t t=1; t<threads; ++t) pool.emplace_back(guarded);
+    }
+    catch (...) {}
+    guarded();
+    for (std::thread& thread : pool) thread.join();
+    if (error) std::rethrow_exception(error);
+  }
+
+  template <class Make>
+  void spread (const size_t n, const size_t block, const size_t threads, Make&& make)
+  {
+    std::atomic<size_t> next(0);
+    together(threads, [&] (const std::atomic<bool>& failed) {
+      auto run = make();
+      while (!failed.load(std::memory_order_relaxed)) {
+        const size_t first = next.fetch_add(block, std::memory_order_relaxed);
+        if (first >= n) return;
+        const size_t last = std::min(n, first+block);
+        for (size_t p=first; p<last; ++p) run(p);
+      }
+    });
+  }
+
+  template <class F>
+  [[gnu::noinline]] void offline (F&& f)
+  {
+    f();
+  }
+
+  template <class Key, class Make>
+  void runParallel (const size_t n, const size_t nCells, const size_t threads, Key&& key, Make&& make)
+  {
+    if (n < cell_order_min || nCells == 0) return spread(n, thread_block, threads, make);
+    const std::vector<size_t> order = cellOrder(n, nCells, key);
+    spread(n, thread_block, threads, [&] {
+      return [&order, run = make()] (const size_t p) mutable { run(order[p]); };
+    });
+  }
+
+  class Chunks {
+  public:
+    std::vector<unsigned int>& room (std::uint32_t& id, std::vector<unsigned int>*& current)
+    {
+      if (current == nullptr || current->capacity()-current->size() < chunk_margin) {
+        {
+          const std::lock_guard<std::mutex> hold(m_lock);
+          m_list.emplace_back();
+          current = &m_list.back();
+          id = static_cast<std::uint32_t>(m_list.size()-1);
+        }
+        current->reserve(chunk_size);
+      }
+      return *current;
+    }
+    const std::vector<unsigned int>& operator[] (const std::uint32_t id) const { return m_list[id]; }
+  private:
+    std::deque<std::vector<unsigned int>> m_list;
+    std::mutex m_lock;
+  };
+
+  void gather (meshsearch::MeshGrid::Batch& out, const size_t n, const Chunks& chunks,
+               const std::vector<std::uint32_t>& chunk, const std::vector<size_t>& start)
+  {
+    for (size_t i=0; i<n; ++i) out.offsets[i+1] += out.offsets[i];
+    out.indices.reserve(out.offsets[n]);
+    for (size_t i=0; i<n; ++i) {
+      const unsigned int* first = chunks[chunk[i]].data()+start[i];
+      out.indices.insert(out.indices.end(), first, first+(out.offsets[i+1]-out.offsets[i]));
+    }
+  }
+
+  template <class Key, class Append>
+  void closeParallel (meshsearch::MeshGrid::Batch& out, const size_t n, const size_t nCells, const size_t threads,
+                      Key&& key, Append&& append)
+  {
+    out.offsets.clear();
+    out.offsets.resize(n+1, 0);
+    out.indices.clear();
+    Chunks chunks;
+    std::vector<std::uint32_t> chunk(n);
+    std::vector<size_t> start(n);
+    runParallel(n, nCells, threads, key, [&] {
+      return [&, id = std::uint32_t(0), current = static_cast<std::vector<unsigned int>*>(nullptr)] (const size_t i) mutable {
+        std::vector<unsigned int>& buffer = chunks.room(id, current);
+        chunk[i] = id;
+        start[i] = buffer.size();
+        append(buffer, i);
+        out.offsets[i+1] = buffer.size()-start[i];
+      };
+    });
+    gather(out, n, chunks, chunk, start);
   }
 
   template <class Key, class Scan, class Append>
@@ -89,6 +238,17 @@ namespace {
   void checkLengths (const std::vector<double>& X, const std::vector<double>& Y, const std::vector<double>& Z)
   {
     if (X.size() != Y.size() || X.size() != Z.size()) throw meshsearch::Error("the coordinate vectors differ in length");
+  }
+
+  void checkPoints (const Lims& lims, const std::array<unsigned int, 3>& nCells, const double cellsize,
+                    const std::vector<double>& X, const std::vector<double>& Y, const std::vector<double>& Z)
+  {
+    for (size_t i=0; i<X.size(); ++i) locate(lims, nCells, cellsize, X[i], Y[i], Z[i]);
+  }
+
+  void checkIndices (const std::vector<char>& alive, const std::vector<unsigned int>& indices)
+  {
+    for (const unsigned int index : indices) checkIndex(alive, index);
   }
 
   size_t batchSize (const size_t n, const unsigned int N, const size_t max_size)
@@ -194,35 +354,91 @@ struct meshsearch::MeshGrid::Grouped {
     }
   }
 
+  static void countGroup (const MeshGrid& g, const std::vector<unsigned int>& indices, const std::uint32_t* pos,
+                          const size_t m, const double Rmax, const double Rmin, std::vector<Query>& queries,
+                          std::vector<size_t>& counts, std::vector<std::uint64_t>& out)
+  {
+    counts.assign(m, 0);
+    walk(g, indices, pos, m, Rmax, Rmin, queries,
+         [&] (const size_t q, const size_t first, const size_t n, const double Rmax_sq, const double Rmin_sq) {
+           const Query& Q = queries[q];
+           const size_t self = Q.self;
+           size_t hits = 0;
+           scanBlock(g.m_X.data()+first, g.m_Y.data()+first, g.m_Z.data()+first, n, Q.x, Q.y, Q.z,
+                     [&] (const size_t k, const double dist_sq) {
+                       if ((first+k != self) & (dist_sq <= Rmax_sq) & (dist_sq >= Rmin_sq)) ++hits;
+                     });
+           counts[q] += hits;
+         });
+    for (size_t q=0; q<m; ++q) out[pos[q]] = counts[q];
+  }
+
   static void count (const MeshGrid& g, const std::vector<unsigned int>& indices, const double Rmax, const double Rmin,
                      const std::vector<std::uint32_t>& order, const std::vector<std::uint32_t>& bounds,
-                     std::vector<std::uint64_t>& out)
+                     const size_t threads, std::vector<std::uint64_t>& out)
   {
+    if (threads > 1)
+      return spread(bounds.size()-1, 1, threads, [&] {
+        return [&, queries = std::vector<Query>(), counts = std::vector<size_t>()] (const size_t b) mutable {
+          countGroup(g, indices, order.data()+bounds[b], bounds[b+1]-bounds[b], Rmax, Rmin, queries, counts, out);
+        };
+      });
     std::vector<Query> queries;
     std::vector<size_t> counts;
-    for (size_t b=0; b+1<bounds.size(); ++b) {
-      const std::uint32_t* pos = order.data()+bounds[b];
-      const size_t m = bounds[b+1]-bounds[b];
-      counts.assign(m, 0);
-      walk(g, indices, pos, m, Rmax, Rmin, queries,
-           [&] (const size_t q, const size_t first, const size_t n, const double Rmax_sq, const double Rmin_sq) {
-             const Query& Q = queries[q];
-             const size_t self = Q.self;
-             size_t hits = 0;
-             scanBlock(g.m_X.data()+first, g.m_Y.data()+first, g.m_Z.data()+first, n, Q.x, Q.y, Q.z,
-                       [&] (const size_t k, const double dist_sq) {
-                         if ((first+k != self) & (dist_sq <= Rmax_sq) & (dist_sq >= Rmin_sq)) ++hits;
-                       });
-             counts[q] += hits;
-           });
-      for (size_t q=0; q<m; ++q) out[pos[q]] = counts[q];
-    }
+    for (size_t b=0; b+1<bounds.size(); ++b)
+      countGroup(g, indices, order.data()+bounds[b], bounds[b+1]-bounds[b], Rmax, Rmin, queries, counts, out);
+  }
+
+  static void closeGroup (const MeshGrid& g, const std::vector<unsigned int>& indices, const std::uint32_t* pos,
+                          const size_t m, const double Rmax, const double Rmin, std::vector<Query>& queries,
+                          std::vector<std::vector<unsigned int>>& bufs)
+  {
+    if (bufs.size() < m) bufs.resize(m);
+    for (size_t q=0; q<m; ++q) bufs[q].clear();
+    walk(g, indices, pos, m, Rmax, Rmin, queries,
+         [&] (const size_t q, const size_t first, const size_t count, const double Rmax_sq, const double Rmin_sq) {
+           const Query& Q = queries[q];
+           const size_t self = Q.self;
+           std::vector<unsigned int>& found = bufs[q];
+           const unsigned int* pub = g.m_toPublic.data()+first;
+           scanBlock(g.m_X.data()+first, g.m_Y.data()+first, g.m_Z.data()+first, count, Q.x, Q.y, Q.z,
+                     [&] (const size_t k, const double dist_sq) {
+                       if (first+k != self && dist_sq <= Rmax_sq && dist_sq >= Rmin_sq) found.push_back(pub[k]);
+                     });
+         });
   }
 
   static void close (const MeshGrid& g, const std::vector<unsigned int>& indices, const double Rmax, const double Rmin,
-                     const std::vector<std::uint32_t>& order, const std::vector<std::uint32_t>& bounds, Batch& out)
+                     const std::vector<std::uint32_t>& order, const std::vector<std::uint32_t>& bounds,
+                     const size_t threads, Batch& out)
   {
     const size_t n = indices.size();
+    if (threads > 1) {
+      out.offsets.clear();
+      out.offsets.resize(n+1, 0);
+      out.indices.clear();
+      Chunks chunks;
+      std::vector<std::uint32_t> chunk(n);
+      std::vector<size_t> start(n);
+      spread(bounds.size()-1, 1, threads, [&] {
+        return [&, queries = std::vector<Query>(), bufs = std::vector<std::vector<unsigned int>>(),
+                id = std::uint32_t(0), current = static_cast<std::vector<unsigned int>*>(nullptr)] (const size_t b) mutable {
+          const std::uint32_t* pos = order.data()+bounds[b];
+          const size_t m = bounds[b+1]-bounds[b];
+          closeGroup(g, indices, pos, m, Rmax, Rmin, queries, bufs);
+          for (size_t q=0; q<m; ++q) {
+            const size_t i = pos[q];
+            std::vector<unsigned int>& buffer = chunks.room(id, current);
+            chunk[i] = id;
+            start[i] = buffer.size();
+            buffer.insert(buffer.end(), bufs[q].begin(), bufs[q].end());
+            out.offsets[i+1] = bufs[q].size();
+          }
+        };
+      });
+      gather(out, n, chunks, chunk, start);
+      return;
+    }
     out.offsets.clear();
     out.offsets.resize(n+1, 0);
     out.indices.clear();
@@ -235,19 +451,7 @@ struct meshsearch::MeshGrid::Grouped {
     for (size_t b=0; b+1<bounds.size(); ++b) {
       const std::uint32_t* pos = order.data()+bounds[b];
       const size_t m = bounds[b+1]-bounds[b];
-      if (bufs.size() < m) bufs.resize(m);
-      for (size_t q=0; q<m; ++q) bufs[q].clear();
-      walk(g, indices, pos, m, Rmax, Rmin, queries,
-           [&] (const size_t q, const size_t first, const size_t count, const double Rmax_sq, const double Rmin_sq) {
-             const Query& Q = queries[q];
-             const size_t self = Q.self;
-             std::vector<unsigned int>& found = bufs[q];
-             const unsigned int* pub = g.m_toPublic.data()+first;
-             scanBlock(g.m_X.data()+first, g.m_Y.data()+first, g.m_Z.data()+first, count, Q.x, Q.y, Q.z,
-                       [&] (const size_t k, const double dist_sq) {
-                         if (first+k != self && dist_sq <= Rmax_sq && dist_sq >= Rmin_sq) found.push_back(pub[k]);
-                       });
-           });
+      closeGroup(g, indices, pos, m, Rmax, Rmin, queries, bufs);
       for (size_t q=0; q<m; ++q) {
         const size_t i = pos[q];
         if (chunks.back().capacity()-chunks.back().size() < chunk_margin) {
@@ -275,12 +479,23 @@ struct meshsearch::MeshGrid::Grouped {
 // ===========================================================================
 
 
+meshsearch::Workers::Workers (const int count)
+  : m_count(count)
+{
+  if (count < 1 && count != -1) throw Error("workers must be at least 1, or -1 for every available core");
+}
+
+
+// ===========================================================================
+
+
 std::vector<unsigned int> meshsearch::MeshGrid::nearestObject (const std::vector<double>& X,
                                                                const std::vector<double>& Y,
-                                                               const std::vector<double>& Z) const
+                                                               const std::vector<double>& Z,
+                                                               const Workers workers) const
 {
   std::vector<unsigned int> out;
-  nearestObject(X, Y, Z, out);
+  nearestObject(X, Y, Z, out, workers);
   return out;
 }
 
@@ -291,13 +506,22 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObject (const std::vector
 void meshsearch::MeshGrid::nearestObject (const std::vector<double>& X,
                                           const std::vector<double>& Y,
                                           const std::vector<double>& Z,
-                                          std::vector<unsigned int>& out) const
+                                          std::vector<unsigned int>& out,
+                                          const Workers workers) const
 {
   checkLengths(X, Y, Z);
   if (m_nObjects == 0) throw Error("the grid holds no objects");
 
   out.clear();
   out.resize(X.size());
+  const size_t threads = threadsFor(workers, X.size());
+  if (threads > 1)
+    return offline([&] {
+      checkPoints(m_lims, m_nCells, m_cellsize, X, Y, Z);
+      runParallel(X.size(), m_cells.size(), threads,
+                  [&] (const size_t i) { return get_cell(X[i], Y[i], Z[i]); },
+                  [&] { return [&] (const size_t i) { out[i] = nearestObject(X[i], Y[i], Z[i]); }; });
+    });
   runQueries(X.size(), m_cells.size(),
              [&] (const size_t i) { return get_cell(X[i], Y[i], Z[i]); },
              [&] (const size_t i) { out[i] = nearestObject(X[i], Y[i], Z[i]); });
@@ -307,10 +531,11 @@ void meshsearch::MeshGrid::nearestObject (const std::vector<double>& X,
 // ===========================================================================
 
 
-std::vector<unsigned int> meshsearch::MeshGrid::nearestObject (const std::vector<unsigned int>& indices) const
+std::vector<unsigned int> meshsearch::MeshGrid::nearestObject (const std::vector<unsigned int>& indices,
+                                                               const Workers workers) const
 {
   std::vector<unsigned int> out;
-  nearestObject(indices, out);
+  nearestObject(indices, out, workers);
   return out;
 }
 
@@ -319,11 +544,12 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObject (const std::vector
 
 
 void meshsearch::MeshGrid::nearestObject (const std::vector<unsigned int>& indices,
-                                          std::vector<unsigned int>& out) const
+                                          std::vector<unsigned int>& out,
+                                          const Workers workers) const
 {
   if (&out == &indices) {
     std::vector<unsigned int> result;
-    nearestObject(indices, result);
+    nearestObject(indices, result, workers);
     out.swap(result);
     return;
   }
@@ -332,6 +558,14 @@ void meshsearch::MeshGrid::nearestObject (const std::vector<unsigned int>& indic
 
   out.clear();
   out.resize(indices.size());
+  const size_t threads = threadsFor(workers, indices.size());
+  if (threads > 1)
+    return offline([&] {
+      checkIndices(m_alive, indices);
+      runParallel(indices.size(), m_cells.size(), threads,
+                  [&] (const size_t i) { return objectCell(indices[i]); },
+                  [&] { return [&] (const size_t i) { out[i] = nearestObject(indices[i]); }; });
+    });
   runQueries(indices.size(), m_cells.size(),
              [&] (const size_t i) { return objectCell(indices[i]); },
              [&] (const size_t i) { out[i] = nearestObject(indices[i]); });
@@ -344,10 +578,11 @@ void meshsearch::MeshGrid::nearestObject (const std::vector<unsigned int>& indic
 std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned int N,
                                                                 const std::vector<double>& X,
                                                                 const std::vector<double>& Y,
-                                                                const std::vector<double>& Z) const
+                                                                const std::vector<double>& Z,
+                                                                const Workers workers) const
 {
   std::vector<unsigned int> out;
-  nearestObjects(N, X, Y, Z, out);
+  nearestObjects(N, X, Y, Z, out, workers);
   return out;
 }
 
@@ -359,13 +594,27 @@ void meshsearch::MeshGrid::nearestObjects (const unsigned int N,
                                            const std::vector<double>& X,
                                            const std::vector<double>& Y,
                                            const std::vector<double>& Z,
-                                           std::vector<unsigned int>& out) const
+                                           std::vector<unsigned int>& out,
+                                           const Workers workers) const
 {
   checkLengths(X, Y, Z);
   if (N > m_nObjects) throw Error("N is larger than the number of objects");
 
   out.clear();
   out.resize(batchSize(X.size(), N, out.max_size()));
+  const size_t threads = threadsFor(workers, X.size());
+  if (threads > 1)
+    return offline([&] {
+      checkPoints(m_lims, m_nCells, m_cellsize, X, Y, Z);
+      runParallel(X.size(), m_cells.size(), threads,
+                  [&] (const size_t i) { return get_cell(X[i], Y[i], Z[i]); },
+                  [&] {
+                    return [&, one = std::vector<unsigned int>()] (const size_t i) mutable {
+                      nearestObjects(N, X[i], Y[i], Z[i], one);
+                      std::copy(one.begin(), one.end(), out.begin()+static_cast<std::ptrdiff_t>(i*N));
+                    };
+                  });
+    });
   std::vector<unsigned int> one;
   runQueries(X.size(), m_cells.size(),
              [&] (const size_t i) { return get_cell(X[i], Y[i], Z[i]); },
@@ -380,10 +629,11 @@ void meshsearch::MeshGrid::nearestObjects (const unsigned int N,
 
 
 std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned int N,
-                                                                const std::vector<unsigned int>& indices) const
+                                                                const std::vector<unsigned int>& indices,
+                                                                const Workers workers) const
 {
   std::vector<unsigned int> out;
-  nearestObjects(N, indices, out);
+  nearestObjects(N, indices, out, workers);
   return out;
 }
 
@@ -392,11 +642,11 @@ std::vector<unsigned int> meshsearch::MeshGrid::nearestObjects (const unsigned i
 
 
 void meshsearch::MeshGrid::nearestObjects (const unsigned int N, const std::vector<unsigned int>& indices,
-                                           std::vector<unsigned int>& out) const
+                                           std::vector<unsigned int>& out, const Workers workers) const
 {
   if (&out == &indices) {
     std::vector<unsigned int> result;
-    nearestObjects(N, indices, result);
+    nearestObjects(N, indices, result, workers);
     out.swap(result);
     return;
   }
@@ -405,6 +655,19 @@ void meshsearch::MeshGrid::nearestObjects (const unsigned int N, const std::vect
 
   out.clear();
   out.resize(batchSize(indices.size(), N, out.max_size()));
+  const size_t threads = threadsFor(workers, indices.size());
+  if (threads > 1)
+    return offline([&] {
+      checkIndices(m_alive, indices);
+      runParallel(indices.size(), m_cells.size(), threads,
+                  [&] (const size_t i) { return objectCell(indices[i]); },
+                  [&] {
+                    return [&, one = std::vector<unsigned int>()] (const size_t i) mutable {
+                      nearestObjects(N, indices[i], one);
+                      std::copy(one.begin(), one.end(), out.begin()+static_cast<std::ptrdiff_t>(i*N));
+                    };
+                  });
+    });
   std::vector<unsigned int> one;
   runQueries(indices.size(), m_cells.size(),
              [&] (const size_t i) { return objectCell(indices[i]); },
@@ -421,10 +684,11 @@ void meshsearch::MeshGrid::nearestObjects (const unsigned int N, const std::vect
 meshsearch::MeshGrid::Batch meshsearch::MeshGrid::closeObjects (const std::vector<double>& X,
                                                                 const std::vector<double>& Y,
                                                                 const std::vector<double>& Z,
-                                                                const double Rmax, const double Rmin) const
+                                                                const double Rmax, const double Rmin,
+                                                                const Workers workers) const
 {
   Batch out;
-  closeObjects(X, Y, Z, Rmax, Rmin, out);
+  closeObjects(X, Y, Z, Rmax, Rmin, out, workers);
   return out;
 }
 
@@ -435,10 +699,20 @@ meshsearch::MeshGrid::Batch meshsearch::MeshGrid::closeObjects (const std::vecto
 void meshsearch::MeshGrid::closeObjects (const std::vector<double>& X,
                                          const std::vector<double>& Y,
                                          const std::vector<double>& Z,
-                                         const double Rmax, const double Rmin, Batch& out) const
+                                         const double Rmax, const double Rmin, Batch& out,
+                                         const Workers workers) const
 {
   checkLengths(X, Y, Z);
   checkRadii(Rmax, Rmin);
+
+  const size_t threads = threadsFor(workers, X.size());
+  if (threads > 1)
+    return offline([&] {
+      checkPoints(m_lims, m_nCells, m_cellsize, X, Y, Z);
+      closeParallel(out, X.size(), m_cells.size(), threads,
+                    [&] (const size_t i) { return get_cell(X[i], Y[i], Z[i]); },
+                    [&] (std::vector<unsigned int>& buffer, const size_t i) { closeAppend(buffer, X[i], Y[i], Z[i], Rmax, Rmin, nullptr); });
+    });
 
   closeBatch(out, X.size(), m_cells.size(),
              [&] (const size_t i) { return get_cell(X[i], Y[i], Z[i]); },
@@ -453,9 +727,9 @@ void meshsearch::MeshGrid::closeObjects (const std::vector<double>& X,
 void meshsearch::MeshGrid::closeObjects (const std::vector<double>& X,
                                          const std::vector<double>& Y,
                                          const std::vector<double>& Z,
-                                         const double Rmax, Batch& out) const
+                                         const double Rmax, Batch& out, const Workers workers) const
 {
-  closeObjects(X, Y, Z, Rmax, 0., out);
+  closeObjects(X, Y, Z, Rmax, 0., out, workers);
 }
 
 
@@ -463,10 +737,11 @@ void meshsearch::MeshGrid::closeObjects (const std::vector<double>& X,
 
 
 meshsearch::MeshGrid::Batch meshsearch::MeshGrid::closeObjects (const std::vector<unsigned int>& indices,
-                                                                const double Rmax, const double Rmin) const
+                                                                const double Rmax, const double Rmin,
+                                                                const Workers workers) const
 {
   Batch out;
-  closeObjects(indices, Rmax, Rmin, out);
+  closeObjects(indices, Rmax, Rmin, out, workers);
   return out;
 }
 
@@ -475,19 +750,29 @@ meshsearch::MeshGrid::Batch meshsearch::MeshGrid::closeObjects (const std::vecto
 
 
 void meshsearch::MeshGrid::closeObjects (const std::vector<unsigned int>& indices,
-                                         const double Rmax, const double Rmin, Batch& out) const
+                                         const double Rmax, const double Rmin, Batch& out,
+                                         const Workers workers) const
 {
   if (&out.indices == &indices) {
     const std::vector<unsigned int> copy(indices);
-    closeObjects(copy, Rmax, Rmin, out);
+    closeObjects(copy, Rmax, Rmin, out, workers);
     return;
   }
 
   checkRadii(Rmax, Rmin);
 
+  const size_t threads = threadsFor(workers, indices.size());
   std::vector<std::uint32_t> order, bounds;
   if (Grouped::sort(*this, indices, Rmax, m_closeFrom, order, bounds))
-    return Grouped::close(*this, indices, Rmax, Rmin, order, bounds, out);
+    return Grouped::close(*this, indices, Rmax, Rmin, order, bounds, threads, out);
+
+  if (threads > 1)
+    return offline([&] {
+      checkIndices(m_alive, indices);
+      closeParallel(out, indices.size(), m_cells.size(), threads,
+                    [&] (const size_t i) { return objectCell(indices[i]); },
+                    [&] (std::vector<unsigned int>& buffer, const size_t i) { closeAppend(buffer, 0., 0., 0., Rmax, Rmin, &indices[i]); });
+    });
 
   closeBatch(out, indices.size(), m_cells.size(),
              [&] (const size_t i) { return objectCell(indices[i]); },
@@ -500,9 +785,9 @@ void meshsearch::MeshGrid::closeObjects (const std::vector<unsigned int>& indice
 
 
 void meshsearch::MeshGrid::closeObjects (const std::vector<unsigned int>& indices,
-                                         const double Rmax, Batch& out) const
+                                         const double Rmax, Batch& out, const Workers workers) const
 {
-  closeObjects(indices, Rmax, 0., out);
+  closeObjects(indices, Rmax, 0., out, workers);
 }
 
 
@@ -512,10 +797,11 @@ void meshsearch::MeshGrid::closeObjects (const std::vector<unsigned int>& indice
 std::vector<std::uint64_t> meshsearch::MeshGrid::countObjects (const std::vector<double>& X,
                                                                const std::vector<double>& Y,
                                                                const std::vector<double>& Z,
-                                                               const double Rmax, const double Rmin) const
+                                                               const double Rmax, const double Rmin,
+                                                               const Workers workers) const
 {
   std::vector<std::uint64_t> out;
-  countObjects(X, Y, Z, Rmax, Rmin, out);
+  countObjects(X, Y, Z, Rmax, Rmin, out, workers);
   return out;
 }
 
@@ -527,13 +813,21 @@ void meshsearch::MeshGrid::countObjects (const std::vector<double>& X,
                                          const std::vector<double>& Y,
                                          const std::vector<double>& Z,
                                          const double Rmax, const double Rmin,
-                                         std::vector<std::uint64_t>& out) const
+                                         std::vector<std::uint64_t>& out, const Workers workers) const
 {
   checkLengths(X, Y, Z);
   checkRadii(Rmax, Rmin);
 
   out.clear();
   out.resize(X.size());
+  const size_t threads = threadsFor(workers, X.size());
+  if (threads > 1)
+    return offline([&] {
+      checkPoints(m_lims, m_nCells, m_cellsize, X, Y, Z);
+      runParallel(X.size(), m_cells.size(), threads,
+                  [&] (const size_t i) { return get_cell(X[i], Y[i], Z[i]); },
+                  [&] { return [&] (const size_t i) { out[i] = countObjects(X[i], Y[i], Z[i], Rmax, Rmin); }; });
+    });
   runQueries(X.size(), m_cells.size(),
              [&] (const size_t i) { return get_cell(X[i], Y[i], Z[i]); },
              [&] (const size_t i) { out[i] = countObjects(X[i], Y[i], Z[i], Rmax, Rmin); });
@@ -546,9 +840,10 @@ void meshsearch::MeshGrid::countObjects (const std::vector<double>& X,
 void meshsearch::MeshGrid::countObjects (const std::vector<double>& X,
                                          const std::vector<double>& Y,
                                          const std::vector<double>& Z,
-                                         const double Rmax, std::vector<std::uint64_t>& out) const
+                                         const double Rmax, std::vector<std::uint64_t>& out,
+                                         const Workers workers) const
 {
-  countObjects(X, Y, Z, Rmax, 0., out);
+  countObjects(X, Y, Z, Rmax, 0., out, workers);
 }
 
 
@@ -556,10 +851,11 @@ void meshsearch::MeshGrid::countObjects (const std::vector<double>& X,
 
 
 std::vector<std::uint64_t> meshsearch::MeshGrid::countObjects (const std::vector<unsigned int>& indices,
-                                                               const double Rmax, const double Rmin) const
+                                                               const double Rmax, const double Rmin,
+                                                               const Workers workers) const
 {
   std::vector<std::uint64_t> out;
-  countObjects(indices, Rmax, Rmin, out);
+  countObjects(indices, Rmax, Rmin, out, workers);
   return out;
 }
 
@@ -569,15 +865,24 @@ std::vector<std::uint64_t> meshsearch::MeshGrid::countObjects (const std::vector
 
 void meshsearch::MeshGrid::countObjects (const std::vector<unsigned int>& indices,
                                          const double Rmax, const double Rmin,
-                                         std::vector<std::uint64_t>& out) const
+                                         std::vector<std::uint64_t>& out, const Workers workers) const
 {
   checkRadii(Rmax, Rmin);
 
   out.clear();
   out.resize(indices.size());
+  const size_t threads = threadsFor(workers, indices.size());
   std::vector<std::uint32_t> order, bounds;
   if (Grouped::sort(*this, indices, Rmax, m_countFrom, order, bounds))
-    return Grouped::count(*this, indices, Rmax, Rmin, order, bounds, out);
+    return Grouped::count(*this, indices, Rmax, Rmin, order, bounds, threads, out);
+
+  if (threads > 1)
+    return offline([&] {
+      checkIndices(m_alive, indices);
+      runParallel(indices.size(), m_cells.size(), threads,
+                  [&] (const size_t i) { return objectCell(indices[i]); },
+                  [&] { return [&] (const size_t i) { out[i] = countObjects(indices[i], Rmax, Rmin); }; });
+    });
 
   runQueries(indices.size(), m_cells.size(),
              [&] (const size_t i) { return objectCell(indices[i]); },
@@ -589,9 +894,10 @@ void meshsearch::MeshGrid::countObjects (const std::vector<unsigned int>& indice
 
 
 void meshsearch::MeshGrid::countObjects (const std::vector<unsigned int>& indices,
-                                         const double Rmax, std::vector<std::uint64_t>& out) const
+                                         const double Rmax, std::vector<std::uint64_t>& out,
+                                         const Workers workers) const
 {
-  countObjects(indices, Rmax, 0., out);
+  countObjects(indices, Rmax, 0., out, workers);
 }
 
 
