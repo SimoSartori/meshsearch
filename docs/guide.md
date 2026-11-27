@@ -400,7 +400,7 @@ data.
 
 Construction allocates nothing beyond the grid itself. In Python, float64
 C-contiguous arrays, which is what numpy creates by default, are read where
-they are. Any other input is converted first, which costs a temporary 8 bytes
+they are, and so is any other contiguous float64 buffer, not only numpy. Any other input is converted first, which costs a temporary 8 bytes
 per object for each converted coordinate array: a float32 array, a list, or
 the columns of an (N, 3) array, which are strided; pass such an array whole,
 as `MeshGrid(pos, cellsize)`, to read it in place. The copy is freed when the
@@ -430,7 +430,8 @@ errors included, but not exhaustion of memory or, in Python, a `TypeError`.
   multiple of the shortest or is below 2⁻¹⁰⁰⁰, and a grid too large to address
   (a cell side tiny against the box, more than 4,294,967,295 objects, or a box
   so large that distances across it overflow a double). Python also requires
-  the limits to be three pairs. A failed constructor builds nothing.
+  the limits to be three pairs, and the coordinates to be one-dimensional
+  arrays, or `pos` of shape (N, 3). A failed constructor builds nothing.
 - a query point outside the box, and any point query on a default-constructed
   C++ grid, which has no box;
 - a negative or NaN radius, or `Rmin > Rmax`;

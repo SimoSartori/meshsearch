@@ -196,7 +196,7 @@ namespace {
   // numpy in one pass. Anything else, a list or an object array for
   // instance, goes through nanobind's sequence conversion, the one the
   // constructor has always used, so that what it accepts and refuses is
-  // unchanged; a shape it cannot take is a TypeError, as it always was.
+  // unchanged; a shape it cannot take is a meshsearch.Error.
   using Column = nb::ndarray<nb::ro, double, nb::ndim<1>, nb::c_contig, nb::device::cpu>;
   using Rows = nb::ndarray<nb::ro, double, nb::shape<-1, 3>, nb::c_contig, nb::device::cpu>;
 
@@ -222,13 +222,31 @@ namespace {
     return nb::module_::import_("numpy").attr("ascontiguousarray")(a, "dtype"_a = "float64");
   }
 
+  // A refused constructor argument is a wrong shape, meshsearch.Error, when
+  // numpy reads it as real numbers of another shape, and a TypeError
+  // otherwise.
+  [[noreturn]] void refuseCoords (const nb::handle& argument, const std::string& wanted, const bool rows)
+  {
+    try {
+      nb::object array = asArray(argument);
+      const char kind = kindOf(array);
+      if (kind == 'f' || kind == 'i' || kind == 'u' || kind == 'b') {
+        const size_t ndim = nb::cast<size_t>(array.attr("ndim"));
+        const bool shaped = rows ? ndim == 2 && nb::cast<size_t>(array.attr("shape")[nb::int_(1)]) == 3 : ndim == 1;
+        if (!shaped) throw meshsearch::Error(wanted);
+      }
+    } catch (nb::python_error&) {
+    }
+    throw nb::type_error(wanted.c_str());
+  }
+
   Coords readColumn (const nb::handle& argument, const char* name)
   {
     const std::string wanted = std::string(name)+" must be a one-dimensional array of real numbers";
     nb::object source = nb::borrow(argument);
     Column column;
     if (numpyReal(source)) {
-      if (nb::cast<size_t>(source.attr("ndim")) != 1) throw nb::type_error(wanted.c_str());
+      if (nb::cast<size_t>(source.attr("ndim")) != 1) throw meshsearch::Error(wanted);
       if (!nb::try_cast(source, column, false)) source = asFloat64(source);
     }
     Coords c;
@@ -238,7 +256,7 @@ namespace {
       c.points = column.shape(0);
       return c;
     }
-    if (!nb::try_cast(source, c.converted, true)) throw nb::type_error(wanted.c_str());
+    if (!nb::try_cast(source, c.converted, true)) refuseCoords(argument, wanted, false);
     c.points = c.converted.size();
     return c;
   }
@@ -250,7 +268,7 @@ namespace {
     Rows rows;
     if (numpyReal(source)) {
       if (nb::cast<size_t>(source.attr("ndim")) != 2 || nb::cast<size_t>(source.attr("shape")[nb::int_(1)]) != 3)
-        throw nb::type_error(wanted);
+        throw meshsearch::Error(wanted);
       if (!nb::try_cast(source, rows, false)) source = asFloat64(source);
     }
     Coords c;
@@ -261,7 +279,7 @@ namespace {
       return c;
     }
     std::vector<std::array<double, 3>> triples;
-    if (!nb::try_cast(source, triples, true)) throw nb::type_error(wanted);
+    if (!nb::try_cast(source, triples, true)) refuseCoords(argument, wanted, true);
     c.converted.resize(3*triples.size());
     for (size_t i=0; i<triples.size(); ++i)
       for (size_t a=0; a<3; ++a) c.converted[3*i+a] = triples[i][a];
@@ -635,7 +653,8 @@ NB_MODULE(meshsearch, m)
          "is missing, the period is below 2**-1000 or the limits too large to\n"
          "shift by it, or the period is not an integer multiple of the\n"
          "shortest. TypeError if periodic is neither a bool nor three bools,\n"
-         "or the coordinates are not one-dimensional arrays of real numbers.\n"
+         "or the coordinates are not arrays of real numbers;\n"
+         "meshsearch.Error if they are not one-dimensional.\n"
          "MemoryError if the grid cannot be allocated.")
 
     .def("__init__",
@@ -661,8 +680,8 @@ NB_MODULE(meshsearch, m)
          "converted first, which costs a temporary copy.\n\n"
          "cellsize, limits and periodic are those of MeshGrid(x, y, z,\n"
          "cellsize), and so are the errors, except that the coordinates cannot\n"
-         "differ in length: TypeError if pos is not an array of real numbers\n"
-         "of shape (N, 3).")
+         "differ in length: TypeError if pos is not an array of real numbers,\n"
+         "meshsearch.Error if it is not of shape (N, 3).")
 
     .def("__len__", &meshsearch::MeshGrid::get_nObjects,
          "Number of objects in the grid, excluding removed ones.")

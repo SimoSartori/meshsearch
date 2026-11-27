@@ -50,6 +50,24 @@ int main ()
   printf("box x [%.4f, %.4f]  y [%.4f, %.4f]  z [%.4f, %.4f]\n\n",
          lims[0][0], lims[0][1], lims[1][0], lims[1][1], lims[2][0], lims[2][1]);
 
+  // The same points as one array of interleaved coordinates, x0 y0 z0 x1 y1
+  // z1 ..., given by a pointer and the number of points. The grid copies
+  // from it and keeps no reference, so the array can go as soon as the
+  // constructor returns. Three pointers to separate arrays work as well.
+  // Either form builds the same grid, with the same results in the same
+  // order.
+  std::vector<double> XYZ;
+  for (size_t i=0; i<n; ++i) {
+    XYZ.push_back(X[i]);
+    XYZ.push_back(Y[i]);
+    XYZ.push_back(Z[i]);
+  }
+  const meshsearch::MeshGrid interleaved(XYZ.data(), n, cellsize, options);
+  const bool same = interleaved.get_nCells() == nCells
+    && interleaved.nearestObjects(10, 0.5, 0.5, 0.5) == grid.nearestObjects(10, 0.5, 0.5, 0.5)
+    && interleaved.closeObjects(0.5, 0.5, 0.5, 0.15, 0.10) == grid.closeObjects(0.5, 0.5, 0.5, 0.15, 0.10);
+  printf("the interleaved array builds the same grid: %s\n\n", same ? "yes" : "no");
+
   const unsigned int nearest = grid.nearestObject(0.5, 0.5, 0.5);
   printf("nearest to the box centre: object %u at (%.4f, %.4f, %.4f)\n",
          nearest, X[nearest], Y[nearest], Z[nearest]);
@@ -102,5 +120,5 @@ int main ()
     printf("querying a point outside the box raised Error: %s\n", e.what());
   }
 
-  return shell.size() == counted && ten.size() == 10 ? 0 : 1;
+  return same && shell.size() == counted && ten.size() == 10 ? 0 : 1;
 }
