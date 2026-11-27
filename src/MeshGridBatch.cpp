@@ -4,8 +4,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -96,6 +98,178 @@ namespace {
   }
 
 }
+
+
+// ===========================================================================
+
+
+struct meshsearch::MeshGrid::Grouped {
+
+  struct Query {
+    double x, y, z;
+    size_t self;
+    std::int64_t lo[3], hi[3];
+  };
+
+  static bool sort (const MeshGrid& g, const std::vector<unsigned int>& indices, const double Rmax, const double from,
+                    std::vector<std::uint32_t>& order, std::vector<std::uint32_t>& bounds)
+  {
+    const size_t n = indices.size();
+    const size_t nCells = g.m_cells.size();
+    const size_t limit = std::numeric_limits<std::uint32_t>::max();
+    if (indices.size() < cell_order_min || nCells == 0 || nCells >= limit || n >= limit || g.m_periodic_any
+        || Rmax >= from) return false;
+    for (const unsigned int index : indices) checkIndex(g.m_alive, index);
+    std::vector<std::uint32_t> start(nCells+1, 0);
+    std::vector<std::uint32_t> key(n);
+    for (size_t i=0; i<n; ++i) {
+      key[i] = static_cast<std::uint32_t>(g.objectCell(indices[i]));
+      ++start[key[i]+1];
+    }
+    bounds.clear();
+    bounds.push_back(0);
+    for (size_t c=0; c<nCells; ++c) {
+      if (start[c+1] != 0) bounds.push_back(start[c]+start[c+1]);
+      start[c+1] += start[c];
+    }
+    order.resize(n);
+    for (size_t i=0; i<n; ++i) order[start[key[i]]++] = static_cast<std::uint32_t>(i);
+    return true;
+  }
+
+  template <class Hit>
+  static void walk (const MeshGrid& g, const std::vector<unsigned int>& indices, const std::uint32_t* pos,
+                    const size_t m, const double Rmax, const double Rmin, std::vector<Query>& queries, Hit&& hit)
+  {
+    const double Rmax_sq = Rmax*Rmax;
+    const double Rmin_sq = Rmin*Rmin;
+    const CellFaces faces = cellFaces(g.m_lims, g.m_nCells, g.m_cellsize);
+
+    queries.resize(m);
+    const size_t self0 = g.m_toInternal[indices[pos[0]]];
+    const auto target = locate(g.m_lims, g.m_nCells, g.m_cellsize, g.m_X[self0], g.m_Y[self0], g.m_Z[self0]);
+    StepWindow all = plainWindow(faces, target, g.m_nCells, g.m_X[self0], g.m_Y[self0], g.m_Z[self0]);
+    all.update(Rmax_sq, true);
+    for (size_t q=0; q<m; ++q) {
+      Query& Q = queries[q];
+      Q.self = g.m_toInternal[indices[pos[q]]];
+      Q.x = g.m_X[Q.self];
+      Q.y = g.m_Y[Q.self];
+      Q.z = g.m_Z[Q.self];
+      StepWindow w = plainWindow(faces, target, g.m_nCells, Q.x, Q.y, Q.z);
+      w.update(Rmax_sq, true);
+      for (int a=0; a<3; ++a) {
+        Q.lo[a] = w.lo[a];
+        Q.hi[a] = w.hi[a];
+        all.lo[a] = std::min(all.lo[a], w.lo[a]);
+        all.hi[a] = std::max(all.hi[a], w.hi[a]);
+      }
+    }
+
+    const std::int64_t tx = target[0], ty = target[1], tz = target[2];
+    const size_t ny = g.m_nCells[1], nz = g.m_nCells[2];
+    const unsigned int nShells = static_cast<unsigned int>(g.m_mask->size());
+    const unsigned int min_mask_idx = firstShell(faces, nShells, Rmin, Rmin_sq);
+
+    for (unsigned int maskInd=min_mask_idx; maskInd<nShells; maskInd++) {
+      if (shellBeyond(maskInd, g.m_cellsize, Rmax_sq)) break;
+      ShellSegments<GridOffset> segments((*g.m_mask)[maskInd], (*g.m_runs)[maskInd], all, maskInd);
+      while (segments.next()) {
+        for (const GridOffset* entry=segments.begin; entry!=segments.end; ++entry) {
+          if (!segments.holds(*entry)) continue;
+          const std::int64_t currX = tx+entry->i;
+          const std::int64_t currY = ty+entry->j;
+          const std::int64_t currZ = tz+entry->k;
+          const CellBlock& block = g.m_cells[(size_t(currX)*ny+size_t(currY))*nz+size_t(currZ)];
+          if (block.count == 0) continue;
+          for (size_t q=0; q<m; ++q) {
+            const Query& Q = queries[q];
+            if (entry->i < Q.lo[0] || entry->i > Q.hi[0] || entry->j < Q.lo[1] || entry->j > Q.hi[1]
+                || entry->k < Q.lo[2] || entry->k > Q.hi[2]) continue;
+            if (cellBeyond(faces, currX, currY, currZ, Q.x, Q.y, Q.z, Rmax_sq)) continue;
+            hit(q, block.start, block.count, Rmax_sq, Rmin_sq);
+          }
+        }
+      }
+    }
+  }
+
+  static void count (const MeshGrid& g, const std::vector<unsigned int>& indices, const double Rmax, const double Rmin,
+                     const std::vector<std::uint32_t>& order, const std::vector<std::uint32_t>& bounds,
+                     std::vector<std::uint64_t>& out)
+  {
+    std::vector<Query> queries;
+    std::vector<size_t> counts;
+    for (size_t b=0; b+1<bounds.size(); ++b) {
+      const std::uint32_t* pos = order.data()+bounds[b];
+      const size_t m = bounds[b+1]-bounds[b];
+      counts.assign(m, 0);
+      walk(g, indices, pos, m, Rmax, Rmin, queries,
+           [&] (const size_t q, const size_t first, const size_t n, const double Rmax_sq, const double Rmin_sq) {
+             const Query& Q = queries[q];
+             const size_t self = Q.self;
+             size_t hits = 0;
+             scanBlock(g.m_X.data()+first, g.m_Y.data()+first, g.m_Z.data()+first, n, Q.x, Q.y, Q.z,
+                       [&] (const size_t k, const double dist_sq) {
+                         if ((first+k != self) & (dist_sq <= Rmax_sq) & (dist_sq >= Rmin_sq)) ++hits;
+                       });
+             counts[q] += hits;
+           });
+      for (size_t q=0; q<m; ++q) out[pos[q]] = counts[q];
+    }
+  }
+
+  static void close (const MeshGrid& g, const std::vector<unsigned int>& indices, const double Rmax, const double Rmin,
+                     const std::vector<std::uint32_t>& order, const std::vector<std::uint32_t>& bounds, Batch& out)
+  {
+    const size_t n = indices.size();
+    out.offsets.clear();
+    out.offsets.resize(n+1, 0);
+    out.indices.clear();
+    std::vector<std::vector<unsigned int>> chunks(1);
+    chunks.back().reserve(chunk_size);
+    std::vector<std::uint32_t> chunk(n);
+    std::vector<size_t> start(n);
+    std::vector<Query> queries;
+    std::vector<std::vector<unsigned int>> bufs;
+    for (size_t b=0; b+1<bounds.size(); ++b) {
+      const std::uint32_t* pos = order.data()+bounds[b];
+      const size_t m = bounds[b+1]-bounds[b];
+      if (bufs.size() < m) bufs.resize(m);
+      for (size_t q=0; q<m; ++q) bufs[q].clear();
+      walk(g, indices, pos, m, Rmax, Rmin, queries,
+           [&] (const size_t q, const size_t first, const size_t count, const double Rmax_sq, const double Rmin_sq) {
+             const Query& Q = queries[q];
+             const size_t self = Q.self;
+             std::vector<unsigned int>& found = bufs[q];
+             const unsigned int* pub = g.m_toPublic.data()+first;
+             scanBlock(g.m_X.data()+first, g.m_Y.data()+first, g.m_Z.data()+first, count, Q.x, Q.y, Q.z,
+                       [&] (const size_t k, const double dist_sq) {
+                         if (first+k != self && dist_sq <= Rmax_sq && dist_sq >= Rmin_sq) found.push_back(pub[k]);
+                       });
+           });
+      for (size_t q=0; q<m; ++q) {
+        const size_t i = pos[q];
+        if (chunks.back().capacity()-chunks.back().size() < chunk_margin) {
+          chunks.emplace_back();
+          chunks.back().reserve(chunk_size);
+        }
+        std::vector<unsigned int>& buffer = chunks.back();
+        chunk[i] = static_cast<std::uint32_t>(chunks.size()-1);
+        start[i] = buffer.size();
+        buffer.insert(buffer.end(), bufs[q].begin(), bufs[q].end());
+        out.offsets[i+1] = bufs[q].size();
+      }
+    }
+    for (size_t i=0; i<n; ++i) out.offsets[i+1] += out.offsets[i];
+    out.indices.reserve(out.offsets[n]);
+    for (size_t i=0; i<n; ++i) {
+      const unsigned int* first = chunks[chunk[i]].data()+start[i];
+      out.indices.insert(out.indices.end(), first, first+(out.offsets[i+1]-out.offsets[i]));
+    }
+  }
+
+};
 
 
 // ===========================================================================
@@ -311,6 +485,10 @@ void meshsearch::MeshGrid::closeObjects (const std::vector<unsigned int>& indice
 
   checkRadii(Rmax, Rmin);
 
+  std::vector<std::uint32_t> order, bounds;
+  if (Grouped::sort(*this, indices, Rmax, m_closeFrom, order, bounds))
+    return Grouped::close(*this, indices, Rmax, Rmin, order, bounds, out);
+
   closeBatch(out, indices.size(), m_cells.size(),
              [&] (const size_t i) { return objectCell(indices[i]); },
              [&] (std::vector<unsigned int>& one, const size_t i) { closeObjects(indices[i], Rmax, Rmin, one); },
@@ -397,6 +575,10 @@ void meshsearch::MeshGrid::countObjects (const std::vector<unsigned int>& indice
 
   out.clear();
   out.resize(indices.size());
+  std::vector<std::uint32_t> order, bounds;
+  if (Grouped::sort(*this, indices, Rmax, m_countFrom, order, bounds))
+    return Grouped::count(*this, indices, Rmax, Rmin, order, bounds, out);
+
   runQueries(indices.size(), m_cells.size(),
              [&] (const size_t i) { return objectCell(indices[i]); },
              [&] (const size_t i) { out[i] = countObjects(indices[i], Rmax, Rmin); });

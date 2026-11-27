@@ -594,6 +594,8 @@ namespace meshsearch {
     void closeAppend (std::vector<unsigned int>& out, double X, double Y, double Z, double Rmax, double Rmin,
                       const unsigned int* index) const;
 
+    struct Grouped;
+
   };
 
 }

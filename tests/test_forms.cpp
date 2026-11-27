@@ -467,24 +467,35 @@ namespace {
   }
 
   // A large batch, point and index forms, against the single queries
-  // concatenated in input order: same indices, same order, same offsets.
+  // concatenated in input order: same indices, same order, same offsets, and
+  // the same count for each query.
   void checkLarge (const MeshGrid& g, const std::vector<double>& qx, const std::vector<double>& qy,
                    const std::vector<double>& qz, const Indices& qi, const double Rmax, const double Rmin)
   {
     MeshGrid::Batch expect, expecti;
     expect.offsets.push_back(0);
     expecti.offsets.push_back(0);
+    Counts counts, countsi;
     Indices one;
     for (size_t q=0; q<qx.size(); ++q) {
       g.closeObjects(qx[q], qy[q], qz[q], Rmax, Rmin, one);
       expect.indices.insert(expect.indices.end(), one.begin(), one.end());
       expect.offsets.push_back(expect.indices.size());
+      counts.push_back(g.countObjects(qx[q], qy[q], qz[q], Rmax, Rmin));
     }
     for (const unsigned int i : qi) {
       g.closeObjects(i, Rmax, Rmin, one);
       expecti.indices.insert(expecti.indices.end(), one.begin(), one.end());
       expecti.offsets.push_back(expecti.indices.size());
+      countsi.push_back(g.countObjects(i, Rmax, Rmin));
+      assert(countsi.back() == one.size());
     }
+    assert(g.countObjects(qx, qy, qz, Rmax, Rmin) == counts);
+    assert(g.countObjects(qi, Rmax, Rmin) == countsi);
+    Counts countOut(5, 7);
+    g.countObjects(qi, Rmax, Rmin, countOut);
+    assert(countOut == countsi);
+    if (Rmin == 0.) assert(g.countObjects(qi, Rmax) == countsi);
     const MeshGrid::Batch b = g.closeObjects(qx, qy, qz, Rmax, Rmin);
     assert(b.indices == expect.indices && b.offsets == expect.offsets);
     const MeshGrid::Batch bi = g.closeObjects(qi, Rmax, Rmin);
@@ -728,6 +739,80 @@ int main ()
     checkLarge(g, qx, qy, qz, qi, 0.05, 0.001);
   }
   std::printf("  large batches, very large results: ok\n");
+
+  // Large index batches answered by cell. From the size at which a batch
+  // answers in cell order, an index batch on a plain grid, with Rmax below
+  // the radii from which whole cells are accepted or skipped, may answer all
+  // the queries of one cell together; each query must still get exactly its
+  // single query's count and indices, in order. The grid has holes and
+  // relocated blocks: objects are removed, then added back, partly in the
+  // clumps the batch queries most, and the added objects are queried too.
+  // Indices repeat (some thousands of times) and come in random order, so a
+  // cell's queries hold the same object more than once and are scattered
+  // through the input. Half the objects are uniform, half in 40 tight clumps,
+  // with exact duplicates, so cells hold from one query to thousands and
+  // distances tie at 0. Radii run from 0 to 5 cell sides (below 6, where the
+  // whole-cell rules start on a dense grid), as balls, shells, a thin shell
+  // and Rmax = Rmin; the last batch holds a removed index and must raise.
+  {
+    const double c = 0.04;
+    std::vector<double> x, y, z;
+    randomPoints(x, y, z, 6000, unit);
+    std::vector<std::array<double,3>> clumps;
+    for (int k=0; k<40; ++k) clumps.push_back({uniform(0.05, 0.95), uniform(0.05, 0.95), uniform(0.05, 0.95)});
+    std::normal_distribution<double> gauss(0., 0.3*c);
+    for (int k=0; k<6000; ++k) {
+      const auto& at = clumps[size_t(k % 40)];
+      x.push_back(std::min(std::max(at[0]+gauss(rng), 0.), 1.));
+      y.push_back(std::min(std::max(at[1]+gauss(rng), 0.), 1.));
+      z.push_back(std::min(std::max(at[2]+gauss(rng), 0.), 1.));
+    }
+    for (int k=0; k<300; ++k) {
+      const size_t from = size_t(integer(0, 11999));
+      x.push_back(x[from]);
+      y.push_back(y[from]);
+      z.push_back(z[from]);
+    }
+    MeshGrid g(x, y, z, c, MeshGrid::Options{unit, {}});
+    assert(g.get_cellsize() == c);
+    std::vector<char> alive(x.size(), 1);
+    for (int k=0; k<1500; ++k) {
+      const unsigned int i = unsigned(integer(0, int(x.size())-1));
+      if (alive[i]) {
+        g.removeObject(i);
+        alive[i] = 0;
+      }
+    }
+    for (int k=0; k<1500; ++k) {
+      const size_t from = size_t(integer(0, 11999));
+      const double dx = (k % 2) ? 0. : uniform(-0.5, 0.5)*c;
+      const unsigned int i = g.addObject(std::min(std::max(x[from]+dx, 0.), 1.), y[from], z[from]);
+      assert(i == alive.size());
+      alive.push_back(1);
+    }
+    Indices live;
+    for (size_t i=0; i<alive.size(); ++i) if (alive[i]) live.push_back(unsigned(i));
+    Indices qi;
+    for (int k=0; k<110000; ++k) qi.push_back(live[size_t(integer(0, int(live.size())-1))]);
+    for (int k=0; k<4000; ++k) qi[size_t(integer(0, 109999))] = live[k % 3];
+    const std::vector<double> none;
+    for (const auto& radii : {std::array<double,2>{0., 0.}, std::array<double,2>{0.5*c, 0.}, std::array<double,2>{c, 0.3*c},
+                              std::array<double,2>{2.5*c, 0.}, std::array<double,2>{4.*c, 3.9*c},
+                              std::array<double,2>{0.7*c, 0.7*c}})
+      checkLarge(g, none, none, none, qi, radii[0], radii[1]);
+    Counts countsi;
+    for (const unsigned int i : qi) countsi.push_back(g.countObjects(i, 5.*c, 0.));
+    assert(g.countObjects(qi, 5.*c) == countsi);
+    Indices bad = qi;
+    unsigned int removed = 0;
+    while (alive[removed]) ++removed;
+    bad[size_t(integer(0, 109999))] = removed;
+    assert(raisesIndex([&] { g.closeObjects(bad, c); }));
+    assert(raisesIndex([&] { g.countObjects(bad, c); }));
+    bad.back() = unsigned(alive.size());
+    assert(raisesIndex([&] { g.countObjects(bad, 2.*c, c); }));
+  }
+  std::printf("  large index batches, by cell:      ok\n");
 
   // The caller's container keeps its storage: a container-first call clears
   // it and refills it in place, so a buffer large enough for the result is
