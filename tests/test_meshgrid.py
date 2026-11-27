@@ -2215,3 +2215,223 @@ def test_a_batch_with_workers_raises_naming_the_first_bad_query(worker_grids):
     for workers in (1, 3, -1):
         with pytest.raises(meshsearch.IndexError, match="query 2500"):
             grid.nearest_object(objects, workers=workers)
+
+
+# --------------------------------------------------------------------------
+# constructor forms
+#
+# MeshGrid(x, y, z, cellsize) and MeshGrid(pos, cellsize) with pos of shape
+# (N, 3) must build the same grid from the same values, whatever the layout
+# and dtype of the input: the same box, cells and cell side, the same objects
+# in every cell in the same order, and the same answer to every query. The
+# reference is built from Python lists, the sequence conversion the
+# constructor has always used. float64 C-contiguous input is read in place,
+# without a temporary copy; numpy reports its own allocations to tracemalloc,
+# so a conversion shows there and a read in place does not.
+
+
+def grid_signature(grid, seed):
+    """Everything a grid answers, for comparing grids built in different ways."""
+    lims = np.asarray(grid.lims)
+    nx, ny, nz = grid.n_cells
+    c = grid.cellsize
+    cells = []
+    for i in range(nx):
+        for j in range(ny):
+            for k in range(nz):
+                centre = [min(lims[a][1], lims[a][0] + (t + 0.5) * c) for a, t in enumerate((i, j, k))]
+                cells.append(grid.get_objects_in_cell(*centre).tolist())
+    rng = np.random.default_rng(seed)
+    q = [lims[a][0] + rng.random(300) * (lims[a][1] - lims[a][0]) for a in range(3)]
+    idx = np.arange(0, len(grid), 3)
+    n = min(5, len(grid) - 1)
+    out = [lims.tobytes(), (nx, ny, nz), c, grid.periodic, len(grid), cells,
+           grid.nearest_object(*q).tolist(), grid.nearest_objects(n, *q).tolist(),
+           grid.nearest_object(idx).tolist(), grid.nearest_objects(n, idx).tolist()]
+    for rmax, rmin in ((1.5 * c, 0.0), (4.0 * c, 0.5 * c)):
+        for b in (grid.close_objects(*q, rmax, rmin), grid.close_objects(idx, rmax, rmin)):
+            out += [b.indices.tolist(), b.offsets.tolist()]
+        out += [grid.count_objects(*q, rmax, rmin).tolist(), grid.count_objects(idx, rmax, rmin).tolist()]
+    return out
+
+
+def ctor_points(n=1500, seed=50):
+    """Uniform points with a few coincident ones and both signed zeros, which
+    decide the sign of a fitted box edge bit for bit."""
+    rng = np.random.default_rng(seed)
+    pos = rng.random((n, 3))
+    pos[: n // 10] = pos[n // 10: 2 * (n // 10)]
+    pos[5:15] = 0.0
+    pos[5:15:2] = -0.0
+    return pos
+
+
+CTOR_OPTIONS = [
+    ("fitted", 0.12, {}),
+    ("box", 0.2, {"limits": [[-0.5, 1.5], [-0.25, 1.0], [-0.1, 1.2]]}),
+    ("periodic", 0.15, {"limits": BOX, "periodic": True}),
+    ("mixed", 0.1, {"limits": BOX, "periodic": (True, False, True)}),
+]
+
+
+@pytest.mark.parametrize("name, cellsize, kwargs", CTOR_OPTIONS, ids=[o[0] for o in CTOR_OPTIONS])
+def test_every_input_layout_builds_the_same_grid(name, cellsize, kwargs):
+    pos = ctor_points()
+    if name in ("periodic", "mixed"):
+        pos = np.clip(pos, 0.0, np.nextafter(1.0, 0.0))
+    x, y, z = (pos[:, a].copy() for a in range(3))
+    expected = grid_signature(meshsearch.MeshGrid(x.tolist(), y.tolist(), z.tolist(), cellsize, **kwargs), 1)
+
+    fortran = np.asfortranarray(pos)
+    wide = np.zeros((len(pos), 5))
+    wide[:, 1:4] = pos
+    readonly = pos.copy()
+    readonly.flags.writeable = False
+    big_endian = pos.astype(">f8")
+    columns = {
+        "float64 copies": (x, y, z),
+        "columns of (N, 3)": (pos[:, 0], pos[:, 1], pos[:, 2]),
+        "columns of a Fortran (N, 3)": (fortran[:, 0], fortran[:, 1], fortran[:, 2]),
+        "read-only": (readonly[:, 0].copy(), readonly[:, 1], readonly[:, 2]),
+        "big-endian": (big_endian[:, 0], big_endian[:, 1], big_endian[:, 2]),
+        "lists": (x.tolist(), y.tolist(), z.tolist()),
+        "tuples": (tuple(x), tuple(y), tuple(z)),
+    }
+    rows = {
+        "C (N, 3)": pos,
+        "Fortran (N, 3)": fortran,
+        "strided rows": pos.repeat(2, axis=0)[::2],
+        "a slice of wider rows": wide[:, 1:4],
+        "read-only": readonly,
+        "big-endian": big_endian,
+        "list of triples": pos.tolist(),
+        "object array": pos.astype(object),
+    }
+    for label, xyz in columns.items():
+        assert grid_signature(meshsearch.MeshGrid(*xyz, cellsize, **kwargs), 1) == expected, label
+    for label, p in rows.items():
+        assert grid_signature(meshsearch.MeshGrid(p, cellsize, **kwargs), 1) == expected, label
+    assert grid_signature(meshsearch.MeshGrid(pos=pos, cellsize=cellsize, **kwargs), 1) == expected
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float16, np.int64, np.int32, np.uint8, np.bool_])
+def test_other_dtypes_build_the_grid_of_their_values(dtype):
+    """Converted as the sequence conversion converts each element."""
+    rng = np.random.default_rng(51)
+    pos = (rng.random((800, 3)) * 20).astype(dtype)
+    limits = [[0.0, 20.0]] * 3
+    lists = [pos[:, a].tolist() for a in range(3)]
+    expected = grid_signature(meshsearch.MeshGrid(*lists, 2.5, limits=limits), 2)
+    assert grid_signature(meshsearch.MeshGrid(pos, 2.5, limits=limits), 2) == expected
+    assert grid_signature(meshsearch.MeshGrid(pos[:, 0], pos[:, 1], pos[:, 2], 2.5, limits=limits), 2) == expected
+    columns = [np.ascontiguousarray(pos[:, a]) for a in range(3)]
+    assert grid_signature(meshsearch.MeshGrid(*columns, 2.5, limits=limits), 2) == expected
+
+
+def test_the_grid_keeps_no_reference_to_the_input():
+    pos = ctor_points(600, seed=52)
+    x, y, z = (pos[:, a].copy() for a in range(3))
+    grids = [meshsearch.MeshGrid(pos, 0.15), meshsearch.MeshGrid(x, y, z, 0.15)]
+    expected = [grid_signature(g, 3) for g in grids]
+    refcounts = [sys.getrefcount(a) for a in (pos, x, y, z)]
+    for a in (pos, x, y, z):
+        a[...] = np.nan
+    del a
+    assert [grid_signature(g, 3) for g in grids] == expected
+    assert [sys.getrefcount(a) for a in (pos, x, y, z)] == refcounts
+    assert expected[0] == expected[1]
+
+
+def numpy_peak(build):
+    import tracemalloc
+    tracemalloc.start()
+    try:
+        build()
+        return tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def test_float64_contiguous_input_is_read_without_a_copy():
+    pos = ctor_points(200_000, seed=53)
+    x, y, z = (pos[:, a].copy() for a in range(3))
+    size = pos.shape[0] * 8
+    assert numpy_peak(lambda: meshsearch.MeshGrid(pos, 0.02)) < size // 10
+    assert numpy_peak(lambda: meshsearch.MeshGrid(x, y, z, 0.02)) < size // 10
+    # The controls: a layout that must be converted shows its copy.
+    assert numpy_peak(lambda: meshsearch.MeshGrid(np.asfortranarray(pos), 0.02)) >= 3 * size
+    assert numpy_peak(lambda: meshsearch.MeshGrid(pos[:, 0], y, z, 0.02)) >= size
+
+
+def test_pos_errors_are_those_of_separate_arrays():
+    pos = ctor_points(300, seed=54)
+    for axis in range(3):
+        for bad in (NAN, INF, -INF):
+            p = pos.copy()
+            p[17, axis] = bad
+            p[40, 2 - axis] = bad
+            for kwargs in ({}, {"limits": BOX}):
+                with pytest.raises(meshsearch.Error) as rows:
+                    meshsearch.MeshGrid(p, 0.2, **kwargs)
+                with pytest.raises(meshsearch.Error) as columns:
+                    meshsearch.MeshGrid(p[:, 0], p[:, 1], p[:, 2], 0.2, **kwargs)
+                assert str(rows.value) == str(columns.value)
+                assert f"coordinate {17 if axis <= 2 - axis else 40} is not finite" in str(rows.value)
+        p = pos.copy()
+        p[9, axis] = 1.5
+        with pytest.raises(meshsearch.Error, match="outside the limits") as rows:
+            meshsearch.MeshGrid(p, 0.2, limits=BOX)
+        with pytest.raises(meshsearch.Error) as columns:
+            meshsearch.MeshGrid(*p.T, 0.2, limits=BOX)
+        assert str(rows.value) == str(columns.value)
+    for cellsize in (0.0, -1.0, NAN, INF):
+        raises_plain_error(lambda: meshsearch.MeshGrid(pos, cellsize))
+    raises_plain_error(lambda: meshsearch.MeshGrid(pos, 0.2, periodic=True))
+    raises_plain_error(lambda: meshsearch.MeshGrid(pos, 0.2, limits=[[0, 1], [0, 1]]))
+    raises_plain_error(lambda: meshsearch.MeshGrid(np.empty((0, 3)), 0.2))
+    with pytest.raises(TypeError):
+        meshsearch.MeshGrid(pos, 0.2, periodic="yes")
+    with pytest.raises(TypeError):
+        meshsearch.MeshGrid(pos, 0.2, BOX)
+    with pytest.raises(TypeError):
+        meshsearch.MeshGrid(pos, "0.2")
+
+
+def test_no_points_with_limits_build_an_empty_grid():
+    for empty in (np.empty((0, 3)), []):
+        grid = meshsearch.MeshGrid(empty, 0.2, limits=BOX)
+        assert len(grid) == 0
+        assert grid.n_cells == meshsearch.MeshGrid([], [], [], 0.2, limits=BOX).n_cells
+
+
+@pytest.mark.parametrize("bad", [
+    np.zeros(30), np.zeros((10, 2)), np.zeros((10, 4)), np.zeros((3, 10)), np.zeros((10, 3, 1)),
+    np.float64(1.0), 1.0, None, "abc", [[1.0, 2.0]] * 4, [[1.0, 2.0, 3.0], [1.0, 2.0]],
+    np.array([["1", "2", "3"]]), np.zeros((4, 3), dtype="datetime64[s]"),
+], ids=lambda b: type(b).__name__ + str(getattr(b, "shape", "")))
+def test_pos_that_is_not_n_by_3_real_numbers_raises_type_error(bad):
+    with pytest.raises(TypeError):
+        meshsearch.MeshGrid(bad, 0.2, limits=BOX)
+
+
+@pytest.mark.parametrize("bad", [
+    np.zeros((10, 1)), np.zeros((10, 3)), np.float64(1.0), 1.0, None, "abc", ["1"] * 10,
+    np.arange(10).astype("datetime64[s]"), (v for v in range(10)),
+], ids=lambda b: type(b).__name__ + str(getattr(b, "shape", "")))
+def test_separate_arrays_that_are_not_one_dimensional_reals_raise_type_error(bad):
+    """As they always have: these are the cases the sequence conversion refuses.
+    Complex numbers are not among them: they are converted, with numpy's
+    ComplexWarning, as they always were."""
+    ok = np.zeros(10)
+    with pytest.raises(TypeError):
+        meshsearch.MeshGrid(bad, ok, ok, 0.2, limits=BOX)
+    with pytest.raises(TypeError):
+        meshsearch.MeshGrid(ok, ok, bad, 0.2, limits=BOX)
+
+
+def test_separate_arrays_of_different_lengths_raise_whatever_their_layout():
+    pos = ctor_points(100, seed=55)
+    with pytest.raises(meshsearch.Error, match="differ in length"):
+        meshsearch.MeshGrid(pos[:, 0], pos[:99, 1], pos[:, 2], 0.2)
+    with pytest.raises(meshsearch.Error, match="differ in length"):
+        meshsearch.MeshGrid(pos[:, 0].tolist(), pos[:, 1].astype(np.float32), np.zeros(3), 0.2)
