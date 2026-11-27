@@ -577,11 +577,6 @@ namespace meshsearch {
 
     size_t objectCell (unsigned int index) const;
 
-    template <bool Exclude, class Sink>
-    void closeScan (const std::array<unsigned int, 3>& target,
-                    double X, double Y, double Z, size_t self,
-                    double Rmax, double Rmin, Sink&& sink) const;
-
     void wholeCount ();
     void wholeGates (std::ptrdiff_t change);
     std::size_t countWhole (double X, double Y, double Z, double Rmax, double Rmin) const;

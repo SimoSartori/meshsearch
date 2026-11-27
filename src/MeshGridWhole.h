@@ -79,7 +79,7 @@ namespace {
   }
 
   template <class Each, class Emit>
-  class WholeVisit {
+  class WholeVisit : public TallyTag<Each> {
   public:
     using whole_rules = void;
 
@@ -89,6 +89,16 @@ namespace {
     void operator() (const size_t first, const size_t k, const double dist_sq)
     {
       m_each(first, k, dist_sq);
+    }
+
+    MESHSEARCH_ALWAYS_INLINE bool hit (const size_t first, const size_t k, const double dist_sq) const
+    {
+      return m_each.hit(first, k, dist_sq);
+    }
+
+    MESHSEARCH_ALWAYS_INLINE void add (const size_t n)
+    {
+      m_each.add(n);
     }
 
     void emit (const size_t first, const size_t count)

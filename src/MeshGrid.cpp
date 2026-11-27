@@ -660,24 +660,6 @@ void meshsearch::MeshGrid::closeObjectsPeriodic (std::vector<unsigned int>& out,
 // ===========================================================================
 
 
-template <bool Exclude, class Sink>
-void meshsearch::MeshGrid::closeScan (const std::array<unsigned int, 3>& target,
-                                      const double X, const double Y, const double Z, const size_t self,
-                                      const double Rmax, const double Rmin, Sink&& sink) const
-{
-  const double Rmax_sq = Rmax*Rmax;
-  const double Rmin_sq = Rmin*Rmin;
-
-  walk(target, X, Y, Z, Rmin, [&] { return Rmax_sq; },
-       [&] (const size_t first, const size_t k, const double dist_sq) {
-         if ((!Exclude || first+k != self) && dist_sq <= Rmax_sq && dist_sq >= Rmin_sq) sink(m_toPublic[first+k]);
-       });
-}
-
-
-// ===========================================================================
-
-
 unsigned int meshsearch::MeshGrid::nearestObject (const double X, const double Y, const double Z) const
 {
   if (m_periodic_any) return nearestObjectPeriodic(X, Y, Z, nullptr);
@@ -1118,8 +1100,9 @@ std::size_t meshsearch::MeshGrid::countObjects (const double X, const double Y, 
   const auto target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
   checkRadii(Rmax, Rmin);
 
+  const double Rmax_sq = Rmax*Rmax;
   std::size_t count = 0;
-  closeScan<false>(target, X, Y, Z, no_slot, Rmax, Rmin, [&] (const unsigned int) { ++count; });
+  walk(target, X, Y, Z, Rmin, [&] { return Rmax_sq; }, CountVisit<false>(count, no_slot, Rmax_sq, Rmin*Rmin));
   return count;
 }
 
@@ -1142,8 +1125,9 @@ std::size_t meshsearch::MeshGrid::countObjects (const unsigned int index,
 
   const auto target = locate(m_lims, m_nCells, m_cellsize, X, Y, Z);
 
+  const double Rmax_sq = Rmax*Rmax;
   std::size_t count = 0;
-  closeScan<true>(target, X, Y, Z, self, Rmax, Rmin, [&] (const unsigned int) { ++count; });
+  walk(target, X, Y, Z, Rmin, [&] { return Rmax_sq; }, CountVisit<true>(count, self, Rmax_sq, Rmin*Rmin));
   return count;
 }
 
