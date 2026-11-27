@@ -75,6 +75,12 @@ target_include_directories(meshsearch PUBLIC
 target_compile_features(meshsearch PUBLIC cxx_std_17)
 target_compile_options(meshsearch PRIVATE ${MESHSEARCH_PRIVATE_OPTIONS})
 
+# Batch queries may run on several std::threads. Threads is the platform's own
+# thread library (pthreads), not an external dependency; it is public because
+# the static archive leaves the link to its consumer.
+find_package(Threads REQUIRED)
+target_link_libraries(meshsearch PUBLIC Threads::Threads)
+
 if (MESHSEARCH_BUILD_EXAMPLES)
   add_executable(example examples/example.cpp)
   target_link_libraries(example PRIVATE meshsearch)
@@ -114,12 +120,17 @@ if (MESHSEARCH_BUILD_TESTS)
   add_test(NAME api COMMAND test_api)
 
   # The forms test queries one grid from several threads.
-  find_package(Threads REQUIRED)
   add_executable(test_forms tests/test_forms.cpp)
   target_link_libraries(test_forms PRIVATE meshsearch Threads::Threads)
   target_compile_options(test_forms PRIVATE ${MESHSEARCH_PRIVATE_OPTIONS})
 
   add_test(NAME forms COMMAND test_forms)
+
+  add_executable(test_workers tests/test_workers.cpp)
+  target_link_libraries(test_workers PRIVATE meshsearch Threads::Threads)
+  target_compile_options(test_workers PRIVATE ${MESHSEARCH_PRIVATE_OPTIONS})
+
+  add_test(NAME workers COMMAND test_workers)
 
   if (MESHSEARCH_BUILD_EXAMPLES)
     add_test(NAME example COMMAND example)

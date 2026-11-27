@@ -148,6 +148,44 @@ namespace {
   static_assert(!compiles<NearestNCall, Indices&, unsigned, unsigned>, "the container no longer comes first");
   static_assert(!compiles<NearestNCall, unsigned, unsigned, Counts&>, "nearestObjects fills indices");
 
+  // Workers is the last argument of every batch form, after the defaulted
+  // Rmin, and of no single query. It is no number: Workers{8} cannot take
+  // Rmin's place, and no integer becomes a Workers without being named.
+  using meshsearch::Workers;
+  static_assert(!std::is_convertible<int, Workers>::value && !std::is_convertible<Workers, int>::value &&
+                !std::is_convertible<Workers, double>::value && std::is_constructible<Workers, int>::value,
+                "Workers converts to and from no number");
+  static_assert(resolvesTo<Indices, NearestCall, Doubles&, Doubles&, Doubles&, Workers>, "nearest point batch, workers");
+  static_assert(resolvesTo<void, NearestCall, Doubles&, Doubles&, Doubles&, Indices&, Workers>, "into a vector, workers");
+  static_assert(resolvesTo<Indices, NearestCall, Indices&, Workers>, "nearest index batch, workers");
+  static_assert(resolvesTo<void, NearestCall, Indices&, Indices&, Workers>, "nearest index batch into a vector, workers");
+  static_assert(resolvesTo<Indices, NearestNCall, unsigned, Doubles&, Doubles&, Doubles&, Workers>, "N nearest point batch, workers");
+  static_assert(resolvesTo<void, NearestNCall, unsigned, Doubles&, Doubles&, Doubles&, Indices&, Workers>, "into a vector, workers");
+  static_assert(resolvesTo<Indices, NearestNCall, unsigned, Indices&, Workers>, "N nearest index batch, workers");
+  static_assert(resolvesTo<void, NearestNCall, unsigned, Indices&, Indices&, Workers>, "into a vector, workers");
+  static_assert(resolvesTo<Batch, CloseCall, Doubles&, Doubles&, Doubles&, double, double, Workers>, "point batch, workers");
+  static_assert(resolvesTo<void, CloseCall, Doubles&, Doubles&, Doubles&, double, double, Batch&, Workers>, "into Batch, workers");
+  static_assert(resolvesTo<void, CloseCall, Doubles&, Doubles&, Doubles&, double, Batch&, Workers>, "no Rmin, workers");
+  static_assert(resolvesTo<Batch, CloseCall, Indices&, double, double, Workers>, "index batch, workers");
+  static_assert(resolvesTo<void, CloseCall, Indices&, double, double, Batch&, Workers>, "index batch into Batch, workers");
+  static_assert(resolvesTo<void, CloseCall, Indices&, double, Batch&, Workers>, "index batch, no Rmin, workers");
+  static_assert(resolvesTo<Counts, CountCall, Doubles&, Doubles&, Doubles&, double, double, Workers>, "count point batch, workers");
+  static_assert(resolvesTo<void, CountCall, Doubles&, Doubles&, Doubles&, double, double, Counts&, Workers>, "into counts, workers");
+  static_assert(resolvesTo<void, CountCall, Doubles&, Doubles&, Doubles&, double, Counts&, Workers>, "no Rmin, workers");
+  static_assert(resolvesTo<Counts, CountCall, Indices&, double, double, Workers>, "count index batch, workers");
+  static_assert(resolvesTo<void, CountCall, Indices&, double, double, Counts&, Workers>, "count index into counts, workers");
+  static_assert(resolvesTo<void, CountCall, Indices&, double, Counts&, Workers>, "count index, no Rmin, workers");
+  static_assert(!compiles<CloseCall, Indices&, double, Workers>, "Workers cannot stand for Rmin");
+  static_assert(!compiles<CloseCall, Doubles&, Doubles&, Doubles&, double, Workers>, "nor in the point batch");
+  static_assert(!compiles<CountCall, Indices&, double, Workers>, "nor in count");
+  static_assert(!compiles<CloseCall, Indices&, double, double, int>, "a number is no Workers");
+  static_assert(!compiles<CountCall, Indices&, double, double, Counts&, int>, "nor after the container");
+  static_assert(!compiles<NearestCall, Indices&, int>, "nor in nearestObject");
+  static_assert(!compiles<CloseCall, unsigned, double, double, Workers>, "a single query takes no Workers");
+  static_assert(!compiles<CountCall, double, double, double, double, double, Workers>, "nor a single count");
+  static_assert(!compiles<NearestCall, unsigned, Workers>, "nor a single nearestObject");
+  static_assert(!compiles<NearestNCall, unsigned, unsigned, Indices&, Workers>, "nor a single nearestObjects");
+
   template <class F>
   bool raises (F&& f)
   {
@@ -468,7 +506,9 @@ namespace {
 
   // A large batch, point and index forms, against the single queries
   // concatenated in input order: same indices, same order, same offsets, and
-  // the same count for each query.
+  // the same count for each query. Then with 3 workers and with every available
+  // core (-1), which must change nothing; the other counts, and smaller batches,
+  // are in test_workers.
   void checkLarge (const MeshGrid& g, const std::vector<double>& qx, const std::vector<double>& qy,
                    const std::vector<double>& qz, const Indices& qi, const double Rmax, const double Rmin)
   {
@@ -507,6 +547,19 @@ namespace {
     MeshGrid::Batch same{qi, Counts(3, 99)};
     g.closeObjects(same.indices, Rmax, Rmin, same);
     assert(same.indices == expecti.indices && same.offsets == expecti.offsets);
+
+    for (const int w : {3, -1}) {
+      const meshsearch::Workers W(w);
+      assert(g.countObjects(qx, qy, qz, Rmax, Rmin, W) == counts);
+      countOut.assign(5, 7);
+      g.countObjects(qi, Rmax, Rmin, countOut, W);
+      assert(countOut == countsi);
+      const MeshGrid::Batch bw = g.closeObjects(qx, qy, qz, Rmax, Rmin, W);
+      assert(bw.indices == expect.indices && bw.offsets == expect.offsets);
+      MeshGrid::Batch outw{Indices(7, 5), Counts(3, 99)};
+      g.closeObjects(qi, Rmax, Rmin, outw, W);
+      assert(outw.indices == expecti.indices && outw.offsets == expecti.offsets);
+    }
   }
 
 }
@@ -649,6 +702,20 @@ int main ()
     const MeshGrid::Batch bi0 = g.closeObjects(c.qi, 0.05, 0.);
     assert(bi0.indices == closei.indices && bi0.offsets == closei.offsets);
     assert(g.countObjects(c.qi, 0.05) == countsi);
+    // The same batches with several workers, which must change nothing.
+    for (const int w : {3, -1}) {
+      const meshsearch::Workers W(w);
+      assert(g.nearestObject(c.qx, c.qy, c.qz, W) == nn);
+      assert(g.nearestObjects(10, c.qx, c.qy, c.qz, W) == knn);
+      assert(g.nearestObject(c.qi, W) == nni);
+      assert(g.nearestObjects(70, c.qi, W) == knni);
+      const MeshGrid::Batch bw = g.closeObjects(c.qx, c.qy, c.qz, 0.05, 0.01, W);
+      assert(bw.indices == close.indices && bw.offsets == close.offsets);
+      assert(g.countObjects(c.qx, c.qy, c.qz, 0.05, 0.01, W) == counts);
+      const MeshGrid::Batch biw = g.closeObjects(c.qi, 0.05, 0., W);
+      assert(biw.indices == closei.indices && biw.offsets == closei.offsets);
+      assert(g.countObjects(c.qi, 0.05, 0., W) == countsi);
+    }
 
     std::vector<double> bx = c.qx;
     bx[nq-3] = 2.;

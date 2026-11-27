@@ -28,6 +28,39 @@ namespace meshsearch {
   };
 
   /**
+   *  @brief Number of threads a batch query may use: the last argument of
+   *    every batch form, after Rmin where there is one.
+   *
+   *  Results do not depend on it: any number of workers gives the same
+   *  indices and counts, in the same order, bit for bit, and the same error
+   *  on invalid input, which is checked before any worker starts.
+   *
+   *  One, the default, runs the batch in the calling thread. -1 means every
+   *  core available to the process: on Linux the cores of its CPU affinity
+   *  set, which is what a cluster job is given, elsewhere
+   *  std::thread::hardware_concurrency(). More workers than cores are
+   *  allowed but gain nothing. A batch too small to share uses fewer
+   *  threads, or one. Threads are started for each call, the calling thread
+   *  being one of them; if one cannot be started, the batch continues on
+   *  fewer, with the same results. If one throws, such as std::bad_alloc, the others
+   *  stop and the exception reaches the caller.
+   *
+   *  -1 suits a large batch on an otherwise idle process; one suits a
+   *  caller that already runs batches from threads of its own.
+   */
+  struct Workers {
+    /// One worker: the batch runs in the calling thread.
+    Workers () = default;
+    /// @param count at least 1, or -1 for every core available to the process
+    /// @throw Error if @p count is 0 or below -1
+    explicit Workers (int count);
+    /// The count as given: -1, or at least 1.
+    int get_count () const { return m_count; }
+  private:
+    int m_count = 1;
+  };
+
+  /**
    *  @brief Uniform cubic mesh over a set of points, for neighbour queries.
    *
    *  Objects are identified by the index of their coordinates as passed to the
@@ -62,8 +95,8 @@ namespace meshsearch {
    *  The same input (coordinates in the same order, cellsize, options, the
    *  same sequence of addObject and removeObject, the same queries) gives
    *  the same results in the same order, on Linux and macOS, on x86-64
-   *  and ARM, and with any number of threads; a copy answers as the
-   *  original does. Which order the objects take within a cell, and so the
+   *  and ARM, with any number of threads calling the grid, and with any
+   *  number of Workers in a batch; a copy answers as the original does. Which order the objects take within a cell, and so the
    *  order of the results of closeObjects and get_objectsInCell, is not
    *  part of the interface and may change between versions.
    */
@@ -204,15 +237,19 @@ namespace meshsearch {
 
     /**
      *  @brief nearestObject for each point (X[i], Y[i], Z[i]), in order.
+     *  @param X,Y,Z the points, all of the same length
+     *  @param workers threads the batch may use; see Workers
      *  @throw Error if the vectors differ in length, if a point is outside
      *    the box, or if the grid holds no objects, even for no point
      *
-     *  On a throw, the queries already answered are lost. This holds for
-     *  every batch member.
+     *  On a throw, the queries already answered are lost. Every batch
+     *  member takes @p workers last, one by default, and its results do
+     *  not depend on it. Both hold for every batch member.
      */
     std::vector<unsigned int> nearestObject (const std::vector<double>& X,
                                              const std::vector<double>& Y,
-                                             const std::vector<double>& Z) const;
+                                             const std::vector<double>& Z,
+                                             Workers workers = Workers()) const;
 
     /// As above, into @p out, the last argument, which is cleared first and
     /// keeps its capacity; its content is unspecified if the call throws, and
@@ -223,18 +260,21 @@ namespace meshsearch {
     void nearestObject (const std::vector<double>& X,
                         const std::vector<double>& Y,
                         const std::vector<double>& Z,
-                        std::vector<unsigned int>& out) const;
+                        std::vector<unsigned int>& out,
+                        Workers workers = Workers()) const;
 
     /**
      *  @brief nearestObject for each object of @p indices, in order.
      *  @throw IndexError if an index is out of range or removed
      *  @throw Error if fewer than two objects remain, even for no index
      */
-    std::vector<unsigned int> nearestObject (const std::vector<unsigned int>& indices) const;
+    std::vector<unsigned int> nearestObject (const std::vector<unsigned int>& indices,
+                                             Workers workers = Workers()) const;
 
     /// As above, into @p out, which may be @p indices itself.
     void nearestObject (const std::vector<unsigned int>& indices,
-                        std::vector<unsigned int>& out) const;
+                        std::vector<unsigned int>& out,
+                        Workers workers = Workers()) const;
 
     /**
      *  @brief The @p N objects nearest to a point, nearest first; ties by
@@ -286,14 +326,16 @@ namespace meshsearch {
     std::vector<unsigned int> nearestObjects (unsigned int N,
                                               const std::vector<double>& X,
                                               const std::vector<double>& Y,
-                                              const std::vector<double>& Z) const;
+                                              const std::vector<double>& Z,
+                                              Workers workers = Workers()) const;
 
     /// The point batch of nearestObjects, into @p out.
     void nearestObjects (unsigned int N,
                          const std::vector<double>& X,
                          const std::vector<double>& Y,
                          const std::vector<double>& Z,
-                         std::vector<unsigned int>& out) const;
+                         std::vector<unsigned int>& out,
+                         Workers workers = Workers()) const;
 
     /**
      *  @brief nearestObjects for each object of @p indices.
@@ -302,11 +344,13 @@ namespace meshsearch {
      *  @throw Error if N is not below get_nObjects(), even for no index
      */
     std::vector<unsigned int> nearestObjects (unsigned int N,
-                                              const std::vector<unsigned int>& indices) const;
+                                              const std::vector<unsigned int>& indices,
+                                              Workers workers = Workers()) const;
 
     /// As above, into @p out, which may be @p indices itself.
     void nearestObjects (unsigned int N, const std::vector<unsigned int>& indices,
-                         std::vector<unsigned int>& out) const;
+                         std::vector<unsigned int>& out,
+                         Workers workers = Workers()) const;
 
     /**
      *  @brief Objects at distance d from a point, with Rmin <= d <= Rmax.
@@ -377,18 +421,21 @@ namespace meshsearch {
     Batch closeObjects (const std::vector<double>& X,
                         const std::vector<double>& Y,
                         const std::vector<double>& Z,
-                        double Rmax, double Rmin = 0.) const;
+                        double Rmax, double Rmin = 0.,
+                        Workers workers = Workers()) const;
 
     /// The point batch of closeObjects, into @p out, whose indices and
     /// offsets are both replaced; with Rmin, then with Rmin = 0.
     void closeObjects (const std::vector<double>& X,
                        const std::vector<double>& Y,
                        const std::vector<double>& Z,
-                       double Rmax, double Rmin, Batch& out) const;
+                       double Rmax, double Rmin, Batch& out,
+                       Workers workers = Workers()) const;
     void closeObjects (const std::vector<double>& X,
                        const std::vector<double>& Y,
                        const std::vector<double>& Z,
-                       double Rmax, Batch& out) const;
+                       double Rmax, Batch& out,
+                       Workers workers = Workers()) const;
 
     /**
      *  @brief closeObjects for each object of @p indices, with the same
@@ -397,15 +444,18 @@ namespace meshsearch {
      *  @throw Error on the radii as closeObjects, even for no index
      */
     Batch closeObjects (const std::vector<unsigned int>& indices,
-                        double Rmax, double Rmin = 0.) const;
+                        double Rmax, double Rmin = 0.,
+                        Workers workers = Workers()) const;
 
     /// The index batch of closeObjects, into @p out, whose indices and
     /// offsets are both replaced; @p indices may be out.indices itself. With
     /// Rmin, then with Rmin = 0.
     void closeObjects (const std::vector<unsigned int>& indices,
-                       double Rmax, double Rmin, Batch& out) const;
+                       double Rmax, double Rmin, Batch& out,
+                       Workers workers = Workers()) const;
     void closeObjects (const std::vector<unsigned int>& indices,
-                       double Rmax, Batch& out) const;
+                       double Rmax, Batch& out,
+                       Workers workers = Workers()) const;
 
     /**
      *  @brief Number of objects closeObjects would return for the point.
@@ -428,7 +478,8 @@ namespace meshsearch {
     std::vector<std::uint64_t> countObjects (const std::vector<double>& X,
                                              const std::vector<double>& Y,
                                              const std::vector<double>& Z,
-                                             double Rmax, double Rmin = 0.) const;
+                                             double Rmax, double Rmin = 0.,
+                                             Workers workers = Workers()) const;
 
     /// The point batch of countObjects, into @p out; with Rmin, then with
     /// Rmin = 0.
@@ -436,24 +487,29 @@ namespace meshsearch {
                        const std::vector<double>& Y,
                        const std::vector<double>& Z,
                        double Rmax, double Rmin,
-                       std::vector<std::uint64_t>& out) const;
+                       std::vector<std::uint64_t>& out,
+                       Workers workers = Workers()) const;
     void countObjects (const std::vector<double>& X,
                        const std::vector<double>& Y,
                        const std::vector<double>& Z,
-                       double Rmax, std::vector<std::uint64_t>& out) const;
+                       double Rmax, std::vector<std::uint64_t>& out,
+                       Workers workers = Workers()) const;
 
     /// countObjects for each object of @p indices, in order. Throws as the
     /// closeObjects batch.
     std::vector<std::uint64_t> countObjects (const std::vector<unsigned int>& indices,
-                                             double Rmax, double Rmin = 0.) const;
+                                             double Rmax, double Rmin = 0.,
+                                             Workers workers = Workers()) const;
 
     /// The index batch of countObjects, into @p out; with Rmin, then with
     /// Rmin = 0.
     void countObjects (const std::vector<unsigned int>& indices,
                        double Rmax, double Rmin,
-                       std::vector<std::uint64_t>& out) const;
+                       std::vector<std::uint64_t>& out,
+                       Workers workers = Workers()) const;
     void countObjects (const std::vector<unsigned int>& indices,
-                       double Rmax, std::vector<std::uint64_t>& out) const;
+                       double Rmax, std::vector<std::uint64_t>& out,
+                       Workers workers = Workers()) const;
 
     /**
      *  @brief Linear index of the cell containing a point:
