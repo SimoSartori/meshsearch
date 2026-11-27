@@ -15,6 +15,13 @@ division by 2^53 and then by single IEEE operations: no libm call and no NumPy
 random generator. Cell sides, limits and radii are exact binary fractions, so
 the geometry does not depend on a rounded division either.
 
+The batch forms take workers=, the number of threads they may use, and the
+results must not depend on it: the recorded hashes are computed with one
+worker and checked again with several. These batches are small, below the size
+at which a batch is split over threads, so that second check holds the keyword
+to the same results; a larger batch, hashed but not recorded, is compared
+across worker counts to exercise the threads themselves.
+
 Run as a script, this file prints the reference file's content as JSON.
 """
 
@@ -23,6 +30,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 import meshsearch
 
@@ -94,7 +102,7 @@ def digest(a):
     return hashlib.sha256(np.ascontiguousarray(a).tobytes()).hexdigest()
 
 
-def case(boundary, regime, seed):
+def case(boundary, regime, seed, workers=1):
     spec = REGIMES[regime]
     periodic = BOUNDARIES[boundary]
     g = Lcg(seed)
@@ -126,45 +134,45 @@ def case(boundary, regime, seed):
 
     pts = list(zip(qx, qy, qz))
     put("nearest_object.point.single", [grid.nearest_object(*c) for c in pts])
-    put("nearest_object.point.batch", grid.nearest_object(qx, qy, qz))
+    put("nearest_object.point.batch", grid.nearest_object(qx, qy, qz, workers=workers))
     put("nearest_objects.point.single", stacked([grid.nearest_objects(N_NEAREST, *c) for c in pts]))
-    put("nearest_objects.point.batch", grid.nearest_objects(N_NEAREST, qx, qy, qz))
+    put("nearest_objects.point.batch", grid.nearest_objects(N_NEAREST, qx, qy, qz, workers=workers))
     for tag, args in (("rmax", (rmax,)), ("rmin", (rmax, rmin))):
         singles = [grid.close_objects(*c, *args) for c in pts]
         put(f"close_objects.point.{tag}.single", stacked(singles))
         put(f"close_objects.point.{tag}.single_sizes", [len(s) for s in singles])
-        batch = grid.close_objects(qx, qy, qz, *args)
+        batch = grid.close_objects(qx, qy, qz, *args, workers=workers)
         put(f"close_objects.point.{tag}.batch_indices", batch.indices)
         put(f"close_objects.point.{tag}.batch_offsets", batch.offsets)
         put(f"count_objects.point.{tag}.single", [grid.count_objects(*c, *args) for c in pts])
-        put(f"count_objects.point.{tag}.batch", grid.count_objects(qx, qy, qz, *args))
+        put(f"count_objects.point.{tag}.batch", grid.count_objects(qx, qy, qz, *args, workers=workers))
     put("contains.single", [grid.contains(*c) for c in wide])
     put("contains.batch", grid.contains(wide[:, 0].copy(), wide[:, 1].copy(), wide[:, 2].copy()))
 
     put("is_alive.single", [grid.is_alive(int(i)) for i in idx])
     put("is_alive.batch", grid.is_alive(idx))
     put("nearest_object.index.single", [grid.nearest_object(int(i)) for i in live])
-    put("nearest_object.index.batch", grid.nearest_object(live))
+    put("nearest_object.index.batch", grid.nearest_object(live, workers=workers))
     put("nearest_objects.index.single", stacked([grid.nearest_objects(N_NEAREST, int(i)) for i in live]))
-    put("nearest_objects.index.batch", grid.nearest_objects(N_NEAREST, live))
+    put("nearest_objects.index.batch", grid.nearest_objects(N_NEAREST, live, workers=workers))
     for tag, args in (("rmax", (rmax,)), ("rmin", (rmax, rmin))):
         singles = [grid.close_objects(int(i), *args) for i in live]
         put(f"close_objects.index.{tag}.single", stacked(singles))
         put(f"close_objects.index.{tag}.single_sizes", [len(s) for s in singles])
-        batch = grid.close_objects(live, *args)
+        batch = grid.close_objects(live, *args, workers=workers)
         put(f"close_objects.index.{tag}.batch_indices", batch.indices)
         put(f"close_objects.index.{tag}.batch_offsets", batch.offsets)
         put(f"count_objects.index.{tag}.single", [grid.count_objects(int(i), *args) for i in live])
-        put(f"count_objects.index.{tag}.batch", grid.count_objects(live, *args))
+        put(f"count_objects.index.{tag}.batch", grid.count_objects(live, *args, workers=workers))
     return out
 
 
-def compute():
+def compute(workers=1):
     out = {}
     seed = 1
     for boundary in BOUNDARIES:
         for regime in REGIMES:
-            out.update(case(boundary, regime, seed))
+            out.update(case(boundary, regime, seed, workers))
             seed += 1
     return out
 
@@ -177,6 +185,38 @@ def test_hashes_match_the_reference():
     assert set(got) == set(expected), (
         f"the cases differ from the recorded ones: new {sorted(set(got) - set(expected))}, "
         f"gone {sorted(set(expected) - set(got))}")
+
+
+@pytest.mark.parametrize("workers", [2, 7, -1])
+def test_hashes_match_the_reference_with_several_workers(workers):
+    expected = json.loads(REFERENCE.read_text())["hashes"]
+    got = compute(workers)
+    differ = sorted(k for k in expected if k in got and got[k] != expected[k])
+    assert not differ, f"these outputs changed with workers={workers}: {differ}"
+    assert set(got) == set(expected)
+
+
+def test_a_batch_split_over_threads_hashes_as_with_one_worker():
+    g = Lcg(99)
+    p = clustered_points(3000, g)
+    x, y, z = (np.ascontiguousarray(p[:, a]) for a in range(3))
+    q = np.array([[g.uniform(0.125, 0.875) for _ in range(3)] for _ in range(4000)])
+    qx, qy, qz = (np.ascontiguousarray(q[:, a]) for a in range(3))
+    live = np.array([g.next() % 3000 for _ in range(4000)], dtype=np.uint32)
+    for periodic in (False, True):
+        grid = meshsearch.MeshGrid(x, y, z, 0.0625, limits=[[0.0, 1.0]] * 3, periodic=periodic)
+
+        def hashes(workers):
+            close = grid.close_objects(qx, qy, qz, 0.09375, 0.03125, workers=workers)
+            closei = grid.close_objects(live, 0.09375, workers=workers)
+            return [digest(a) for a in (grid.nearest_object(qx, qy, qz, workers=workers),
+                                        grid.nearest_objects(N_NEAREST, live, workers=workers),
+                                        close.indices, close.offsets, closei.indices, closei.offsets,
+                                        grid.count_objects(live, 0.09375, 0.03125, workers=workers))]
+
+        one = hashes(1)
+        for workers in (2, 7, -1):
+            assert hashes(workers) == one, f"periodic={periodic}, workers={workers}"
 
 
 def test_the_single_and_batch_forms_hash_alike():

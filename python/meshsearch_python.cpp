@@ -284,6 +284,21 @@ namespace {
     return static_cast<unsigned int>(value);
   }
 
+  // The workers= keyword of the batch forms: an integer, read without
+  // conversion from a float, then checked as meshsearch::Workers checks it.
+  meshsearch::Workers readWorkers (const nb::handle& argument)
+  {
+    nb::object number = nb::steal(PyNumber_Index(argument.ptr()));
+    if (!number.is_valid()) throw nb::python_error();
+    int overflow = 0;
+    const long long value = PyLong_AsLongLongAndOverflow(number.ptr(), &overflow);
+    if (value == -1 && PyErr_Occurred()) throw nb::python_error();
+    if (overflow != 0) return meshsearch::Workers(overflow < 0 ? -2 : std::numeric_limits<int>::max());
+    if (value < std::numeric_limits<int>::min() || value > std::numeric_limits<int>::max())
+      return meshsearch::Workers(value < 0 ? -2 : std::numeric_limits<int>::max());
+    return meshsearch::Workers(static_cast<int>(value));
+  }
+
   // The caller's out= array, which must already be exactly what the call
   // would return: dtype, shape, C-contiguous and writeable. Nothing is
   // converted, because a converted copy would be a different array and the
@@ -666,7 +681,8 @@ NB_MODULE(meshsearch, m)
 
     .def("nearest_object",
          [](const meshsearch::MeshGrid& self, const BatchArg& x, const nb::object& y, const nb::object& z,
-            const nb::object& out) -> nb::object {
+            const nb::object& out, const nb::object& workers) -> nb::object {
+           const meshsearch::Workers threads = readWorkers(workers);
            const Points points = readPoints(x, y, z);
            const std::vector<double>& X = points.x; const std::vector<double>& Y = points.y; const std::vector<double>& Z = points.z;
            const size_t queries = X.size();
@@ -677,14 +693,14 @@ NB_MODULE(meshsearch, m)
            {
              nb::gil_scoped_release released;
              runBatch(queries,
-                      [&] { self.nearestObject(X, Y, Z, found); },
+                      [&] { self.nearestObject(X, Y, Z, found, threads); },
                       [&] (const size_t i) { self.nearestObject(X[i], Y[i], Z[i]); });
              if (dest != nullptr) std::copy(found.begin(), found.end(), dest);
            }
            if (dest != nullptr) return out;
            return nb::cast(indexArray(std::move(found)));
          },
-         "x"_a, "y"_a, "z"_a, nb::kw_only(), "out"_a = nb::none(),
+         "x"_a, "y"_a, "z"_a, nb::kw_only(), "out"_a = nb::none(), "workers"_a = 1,
          "The object nearest to each of an array-like of points: a uint32 array\n"
          "with one index per query, in query order.\n"
          "A large batch is answered in cell order internally, which is faster;\n"
@@ -702,10 +718,18 @@ NB_MODULE(meshsearch, m)
          "empty batch.\n\n"
          "The GIL is released while the queries run, so other Python threads\n"
          "may run, and may query the same grid; none may modify it until the\n"
-         "call returns.")
+         "call returns.\n\n"
+         "workers, keyword-only, is the number of threads the batch may use:\n"
+         "1, the default, runs it in the calling thread; -1 uses every core\n"
+         "available to the process (on Linux, its CPU affinity set). The\n"
+         "results and their order do not depend on it. A batch too small to\n"
+         "share uses fewer threads. Raises meshsearch.Error if workers is 0 or\n"
+         "below -1, TypeError if it is not an integer.")
 
     .def("nearest_object",
-         [](const meshsearch::MeshGrid& self, const BatchArg& indices, const nb::object& out) -> nb::object {
+         [](const meshsearch::MeshGrid& self, const BatchArg& indices, const nb::object& out,
+            const nb::object& workers) -> nb::object {
+           const meshsearch::Workers threads = readWorkers(workers);
            const auto objects = readIndices(indices);
            const size_t queries = objects.size();
            OutArray target;
@@ -715,14 +739,14 @@ NB_MODULE(meshsearch, m)
            {
              nb::gil_scoped_release released;
              runBatch(objects.size(),
-                      [&] { self.nearestObject(objects, found); },
+                      [&] { self.nearestObject(objects, found, threads); },
                       [&] (const size_t i) { self.nearestObject(objects[i]); });
              if (dest != nullptr) std::copy(found.begin(), found.end(), dest);
            }
            if (dest != nullptr) return out;
            return nb::cast(indexArray(std::move(found)));
          },
-         "indices"_a, nb::kw_only(), "out"_a = nb::none(),
+         "indices"_a, nb::kw_only(), "out"_a = nb::none(), "workers"_a = 1,
          "The object nearest to each object of an array of indices, each\n"
          "excluded from its own answer: a uint32 array with one index per\n"
          "query, in query order.\n\n"
@@ -748,7 +772,13 @@ NB_MODULE(meshsearch, m)
          "for an empty array.\n\n"
          "The GIL is released while the queries run, so other Python threads\n"
          "may run, and may query the same grid; none may modify it until the\n"
-         "call returns.")
+         "call returns.\n\n"
+         "workers, keyword-only, is the number of threads the batch may use:\n"
+         "1, the default, runs it in the calling thread; -1 uses every core\n"
+         "available to the process (on Linux, its CPU affinity set). The\n"
+         "results and their order do not depend on it. A batch too small to\n"
+         "share uses fewer threads. Raises meshsearch.Error if workers is 0 or\n"
+         "below -1, TypeError if it is not an integer.")
 
     .def("nearest_objects",
          [](const meshsearch::MeshGrid& self, const nb::object& n,
@@ -778,8 +808,10 @@ NB_MODULE(meshsearch, m)
 
     .def("nearest_objects",
          [](const meshsearch::MeshGrid& self, const nb::object& count,
-            const BatchArg& x, const nb::object& y, const nb::object& z, const nb::object& out) -> nb::object {
+            const BatchArg& x, const nb::object& y, const nb::object& z, const nb::object& out,
+            const nb::object& workers) -> nb::object {
            const unsigned int n = readCount(count);
+           const meshsearch::Workers threads = readWorkers(workers);
            const Points points = readPoints(x, y, z);
            const std::vector<double>& X = points.x; const std::vector<double>& Y = points.y; const std::vector<double>& Z = points.z;
            const size_t queries = X.size();
@@ -790,14 +822,14 @@ NB_MODULE(meshsearch, m)
            {
              nb::gil_scoped_release released;
              runBatch(queries,
-                      [&] { self.nearestObjects(n, X, Y, Z, found); },
+                      [&] { self.nearestObjects(n, X, Y, Z, found, threads); },
                       [&] (const size_t i) { self.nearestObjects(n, X[i], Y[i], Z[i]); });
              if (dest != nullptr) std::copy(found.begin(), found.end(), dest);
            }
            if (dest != nullptr) return out;
            return nb::cast(owned<unsigned int, 2>(std::move(found), {queries, size_t(n)}));
          },
-         "n"_a, "x"_a, "y"_a, "z"_a, nb::kw_only(), "out"_a = nb::none(),
+         "n"_a, "x"_a, "y"_a, "z"_a, nb::kw_only(), "out"_a = nb::none(), "workers"_a = 1,
          "The n objects nearest to each of an array of points, nearest first;\n"
          "ties by ascending index: a uint32 array of shape (n_query, n),\n"
          "rectangular because every query returns exactly n. A tie at the\n"
@@ -819,12 +851,19 @@ NB_MODULE(meshsearch, m)
          "can count.\n\n"
          "The GIL is released while the queries run, so other Python threads\n"
          "may run, and may query the same grid; none may modify it until the\n"
-         "call returns.")
+         "call returns.\n\n"
+         "workers, keyword-only, is the number of threads the batch may use:\n"
+         "1, the default, runs it in the calling thread; -1 uses every core\n"
+         "available to the process (on Linux, its CPU affinity set). The\n"
+         "results and their order do not depend on it. A batch too small to\n"
+         "share uses fewer threads. Raises meshsearch.Error if workers is 0 or\n"
+         "below -1, TypeError if it is not an integer.")
 
     .def("nearest_objects",
          [](const meshsearch::MeshGrid& self, const nb::object& count,
-            const BatchArg& indices, const nb::object& out) -> nb::object {
+            const BatchArg& indices, const nb::object& out, const nb::object& workers) -> nb::object {
            const unsigned int n = readCount(count);
+           const meshsearch::Workers threads = readWorkers(workers);
            const auto objects = readIndices(indices);
            const size_t queries = objects.size();
            OutArray target;
@@ -834,14 +873,14 @@ NB_MODULE(meshsearch, m)
            {
              nb::gil_scoped_release released;
              runBatch(queries,
-                      [&] { self.nearestObjects(n, objects, found); },
+                      [&] { self.nearestObjects(n, objects, found, threads); },
                       [&] (const size_t i) { self.nearestObjects(n, objects[i]); });
              if (dest != nullptr) std::copy(found.begin(), found.end(), dest);
            }
            if (dest != nullptr) return out;
            return nb::cast(owned<unsigned int, 2>(std::move(found), {queries, size_t(n)}));
          },
-         "n"_a, "indices"_a, nb::kw_only(), "out"_a = nb::none(),
+         "n"_a, "indices"_a, nb::kw_only(), "out"_a = nb::none(), "workers"_a = 1,
          "The n objects nearest to each object of an array of indices, nearest\n"
          "first, each object excluded from its own answer; ties by ascending\n"
          "index: a uint32 array of shape (len(indices), n).\n\n"
@@ -868,7 +907,13 @@ NB_MODULE(meshsearch, m)
          "what 64-bit sizes can count.\n\n"
          "The GIL is released while the queries run, so other Python threads\n"
          "may run, and may query the same grid; none may modify it until the\n"
-         "call returns.")
+         "call returns.\n\n"
+         "workers, keyword-only, is the number of threads the batch may use:\n"
+         "1, the default, runs it in the calling thread; -1 uses every core\n"
+         "available to the process (on Linux, its CPU affinity set). The\n"
+         "results and their order do not depend on it. A batch too small to\n"
+         "share uses fewer threads. Raises meshsearch.Error if workers is 0 or\n"
+         "below -1, TypeError if it is not an integer.")
 
     .def("close_objects",
          [](const meshsearch::MeshGrid& self, const double x, const double y, const double z,
@@ -903,7 +948,8 @@ NB_MODULE(meshsearch, m)
 
     .def("close_objects",
          [](const meshsearch::MeshGrid& self, const BatchArg& x, const nb::object& y, const nb::object& z,
-            const double rmax, const double rmin) {
+            const double rmax, const double rmin, const nb::object& workers) {
+           const meshsearch::Workers threads = readWorkers(workers);
            const Points points = readPoints(x, y, z);
            const std::vector<double>& X = points.x; const std::vector<double>& Y = points.y; const std::vector<double>& Z = points.z;
            const size_t queries = X.size();
@@ -911,12 +957,12 @@ NB_MODULE(meshsearch, m)
            {
              nb::gil_scoped_release released;
              runBatch(queries,
-                      [&] { self.closeObjects(X, Y, Z, rmax, rmin, found); },
+                      [&] { self.closeObjects(X, Y, Z, rmax, rmin, found, threads); },
                       [&] (const size_t i) { self.countObjects(X[i], Y[i], Z[i], rmax, rmin); });
            }
            return makeBatch(indexArray(std::move(found.indices)), int64Array(found.offsets));
          },
-         "x"_a, "y"_a, "z"_a, "rmax"_a, "rmin"_a = 0.,
+         "x"_a, "y"_a, "z"_a, "rmax"_a, "rmin"_a = 0., nb::kw_only(), "workers"_a = 1,
          "Objects at distance d from each of an array of points, with\n"
          "rmin <= d <= rmax, as a meshsearch.Batch (indices, offsets) in compressed-row\n"
          "form: the results of query i are indices[offsets[i]:offsets[i+1]],\n"
@@ -935,22 +981,29 @@ NB_MODULE(meshsearch, m)
          "batch.\n\n"
          "The GIL is released while the queries run, so other Python threads\n"
          "may run, and may query the same grid; none may modify it until the\n"
-         "call returns.")
+         "call returns.\n\n"
+         "workers, keyword-only, is the number of threads the batch may use:\n"
+         "1, the default, runs it in the calling thread; -1 uses every core\n"
+         "available to the process (on Linux, its CPU affinity set). The\n"
+         "results and their order do not depend on it. A batch too small to\n"
+         "share uses fewer threads. Raises meshsearch.Error if workers is 0 or\n"
+         "below -1, TypeError if it is not an integer.")
 
     .def("close_objects",
          [](const meshsearch::MeshGrid& self, const BatchArg& indices,
-            const double rmax, const double rmin) {
+            const double rmax, const double rmin, const nb::object& workers) {
+           const meshsearch::Workers threads = readWorkers(workers);
            const auto objects = readIndices(indices);
            meshsearch::MeshGrid::Batch found;
            {
              nb::gil_scoped_release released;
              runBatch(objects.size(),
-                      [&] { self.closeObjects(objects, rmax, rmin, found); },
+                      [&] { self.closeObjects(objects, rmax, rmin, found, threads); },
                       [&] (const size_t i) { self.countObjects(objects[i], rmax, rmin); });
            }
            return makeBatch(indexArray(std::move(found.indices)), int64Array(found.offsets));
          },
-         "indices"_a, "rmax"_a, "rmin"_a = 0.,
+         "indices"_a, "rmax"_a, "rmin"_a = 0., nb::kw_only(), "workers"_a = 1,
          "Objects at distance d from each object of an array of indices, with\n"
          "rmin <= d <= rmax, each object excluded from its own answer, as a\n"
          "meshsearch.Batch (indices, offsets) in compressed-row form: the results of\n"
@@ -978,7 +1031,13 @@ NB_MODULE(meshsearch, m)
          "array.\n\n"
          "The GIL is released while the queries run, so other Python threads\n"
          "may run, and may query the same grid; none may modify it until the\n"
-         "call returns.")
+         "call returns.\n\n"
+         "workers, keyword-only, is the number of threads the batch may use:\n"
+         "1, the default, runs it in the calling thread; -1 uses every core\n"
+         "available to the process (on Linux, its CPU affinity set). The\n"
+         "results and their order do not depend on it. A batch too small to\n"
+         "share uses fewer threads. Raises meshsearch.Error if workers is 0 or\n"
+         "below -1, TypeError if it is not an integer.")
 
     .def("count_objects",
          nb::overload_cast<double, double, double, double, double>(&meshsearch::MeshGrid::countObjects, nb::const_),
@@ -1002,7 +1061,8 @@ NB_MODULE(meshsearch, m)
 
     .def("count_objects",
          [](const meshsearch::MeshGrid& self, const BatchArg& x, const nb::object& y, const nb::object& z,
-            const double rmax, const double rmin, const nb::object& out) -> nb::object {
+            const double rmax, const double rmin, const nb::object& out, const nb::object& workers) -> nb::object {
+           const meshsearch::Workers threads = readWorkers(workers);
            const Points points = readPoints(x, y, z);
            const std::vector<double>& X = points.x; const std::vector<double>& Y = points.y; const std::vector<double>& Z = points.z;
            const size_t queries = X.size();
@@ -1013,14 +1073,14 @@ NB_MODULE(meshsearch, m)
            {
              nb::gil_scoped_release released;
              runBatch(queries,
-                      [&] { self.countObjects(X, Y, Z, rmax, rmin, found); },
+                      [&] { self.countObjects(X, Y, Z, rmax, rmin, found, threads); },
                       [&] (const size_t i) { self.countObjects(X[i], Y[i], Z[i], rmax, rmin); });
              if (dest != nullptr) copyCounts(found, dest);
            }
            if (dest != nullptr) return out;
            return nb::cast(int64Array(found));
          },
-         "x"_a, "y"_a, "z"_a, "rmax"_a, "rmin"_a = 0., nb::kw_only(), "out"_a = nb::none(),
+         "x"_a, "y"_a, "z"_a, "rmax"_a, "rmin"_a = 0., nb::kw_only(), "out"_a = nb::none(), "workers"_a = 1,
          "For each of an array of points, the number of objects close_objects\n"
          "would return for it: an int64 array with one count per query, in\n"
          "query order. The indices are never collected, so this is cheaper\n"
@@ -1040,11 +1100,18 @@ NB_MODULE(meshsearch, m)
          "batch.\n\n"
          "The GIL is released while the queries run, so other Python threads\n"
          "may run, and may query the same grid; none may modify it until the\n"
-         "call returns.")
+         "call returns.\n\n"
+         "workers, keyword-only, is the number of threads the batch may use:\n"
+         "1, the default, runs it in the calling thread; -1 uses every core\n"
+         "available to the process (on Linux, its CPU affinity set). The\n"
+         "results and their order do not depend on it. A batch too small to\n"
+         "share uses fewer threads. Raises meshsearch.Error if workers is 0 or\n"
+         "below -1, TypeError if it is not an integer.")
 
     .def("count_objects",
          [](const meshsearch::MeshGrid& self, const BatchArg& indices,
-            const double rmax, const double rmin, const nb::object& out) -> nb::object {
+            const double rmax, const double rmin, const nb::object& out, const nb::object& workers) -> nb::object {
+           const meshsearch::Workers threads = readWorkers(workers);
            const auto objects = readIndices(indices);
            const size_t queries = objects.size();
            OutArray target;
@@ -1054,14 +1121,14 @@ NB_MODULE(meshsearch, m)
            {
              nb::gil_scoped_release released;
              runBatch(queries,
-                      [&] { self.countObjects(objects, rmax, rmin, found); },
+                      [&] { self.countObjects(objects, rmax, rmin, found, threads); },
                       [&] (const size_t i) { self.countObjects(objects[i], rmax, rmin); });
              if (dest != nullptr) copyCounts(found, dest);
            }
            if (dest != nullptr) return out;
            return nb::cast(int64Array(found));
          },
-         "indices"_a, "rmax"_a, "rmin"_a = 0., nb::kw_only(), "out"_a = nb::none(),
+         "indices"_a, "rmax"_a, "rmin"_a = 0., nb::kw_only(), "out"_a = nb::none(), "workers"_a = 1,
          "For each object of an array of indices, the number of objects\n"
          "close_objects would return for it, the object itself excluded: an\n"
          "int64 array with one count per index, in order.\n\n"
@@ -1087,7 +1154,13 @@ NB_MODULE(meshsearch, m)
          "array.\n\n"
          "The GIL is released while the queries run, so other Python threads\n"
          "may run, and may query the same grid; none may modify it until the\n"
-         "call returns.")
+         "call returns.\n\n"
+         "workers, keyword-only, is the number of threads the batch may use:\n"
+         "1, the default, runs it in the calling thread; -1 uses every core\n"
+         "available to the process (on Linux, its CPU affinity set). The\n"
+         "results and their order do not depend on it. A batch too small to\n"
+         "share uses fewer threads. Raises meshsearch.Error if workers is 0 or\n"
+         "below -1, TypeError if it is not an integer.")
 
     .def("get_cell", &meshsearch::MeshGrid::get_cell, "x"_a, "y"_a, "z"_a,
          "Linear index of the cell containing a point: (ix * ny + iy) * nz + iz,\n"
