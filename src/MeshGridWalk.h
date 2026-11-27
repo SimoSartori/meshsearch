@@ -4,9 +4,11 @@
 #if defined(__GNUC__) && !defined(__clang__)
 #define MESHSEARCH_ALWAYS_INLINE [[gnu::always_inline]]
 #define MESHSEARCH_NOINLINE [[gnu::noinline]]
+#define MESHSEARCH_TALLY true
 #else
 #define MESHSEARCH_ALWAYS_INLINE
 #define MESHSEARCH_NOINLINE
+#define MESHSEARCH_TALLY false
 #endif
 
 #include "meshsearch/MeshGrid.h"
@@ -390,6 +392,53 @@ namespace {
   template <class Visit>
   struct WholeRules<Visit, std::void_t<typename Visit::whole_rules>> : std::true_type {};
 
+  template <class Visit, class = void>
+  struct Tally : std::false_type {};
+
+  template <class Visit>
+  struct Tally<Visit, std::void_t<typename Visit::tally>> : std::bool_constant<MESHSEARCH_TALLY> {};
+
+  template <class Visit, class = void>
+  struct TallyTag {};
+
+  template <class Visit>
+  struct TallyTag<Visit, std::void_t<typename Visit::tally>> {
+    using tally = void;
+  };
+
+  template <bool Exclude>
+  class CountVisit {
+  public:
+    using tally = void;
+
+    CountVisit (size_t& total, const size_t self, const double Rmax_sq, const double Rmin_sq)
+      : m_total(total), m_self(self), m_Rmax_sq(Rmax_sq), m_Rmin_sq(Rmin_sq) {}
+
+    MESHSEARCH_ALWAYS_INLINE bool hit (const size_t first, const size_t k, const double dist_sq) const
+    {
+      const size_t self = m_self;
+      const double Rmax_sq = m_Rmax_sq;
+      const double Rmin_sq = m_Rmin_sq;
+      return (!Exclude || first+k != self) & (dist_sq <= Rmax_sq) & (dist_sq >= Rmin_sq);
+    }
+
+    MESHSEARCH_ALWAYS_INLINE void add (const size_t n)
+    {
+      m_total += n;
+    }
+
+    void operator() (const size_t first, const size_t k, const double dist_sq)
+    {
+      if ((!Exclude || first+k != m_self) && dist_sq <= m_Rmax_sq && dist_sq >= m_Rmin_sq) ++m_total;
+    }
+
+  private:
+    size_t& m_total;
+    size_t m_self;
+    double m_Rmax_sq;
+    double m_Rmin_sq;
+  };
+
 }
 
 
@@ -402,6 +451,7 @@ void meshsearch::MeshGrid::walkPeriodic (const std::array<unsigned int, 3>& targ
                                          Threshold&& threshold, Visit&& visit) const
 {
   constexpr bool rules = WholeRules<std::decay_t<Visit>>::value;
+  constexpr bool tally = Tally<std::decay_t<Visit>>::value;
 
   const CellFaces faces = periodicFaces(m_lims, m_nCells, m_cellsize, m_periodic, m_omega);
 
@@ -488,6 +538,27 @@ void meshsearch::MeshGrid::walkPeriodic (const std::array<unsigned int, 3>& targ
         const double* x = m_X.data()+first;
         const double* y = m_Y.data()+first;
         const double* z = m_Z.data()+first;
+        if constexpr (tally) {
+          if (!end) {
+            if constexpr (rules) {
+              if (wholeShell) {
+                visit.emit(first, block.count);
+                continue;
+              }
+              if (verdicts ? visit.settle(faces, unwrapped[0], unwrapped[1], unwrapped[2], X, Y, Z, first, block.count)
+                           : cellBeyond(faces, unwrapped[0], unwrapped[1], unwrapped[2], X, Y, Z, threshold())) continue;
+            }
+            else if (cellBeyond(faces, unwrapped[0], unwrapped[1], unwrapped[2], X, Y, Z, threshold())) continue;
+          }
+          size_t hits = 0;
+          auto hitSlot = [&] (const size_t k, const double dist_sq) { if (visit.hit(first, k, dist_sq)) ++hits; };
+          if (end) scanImages(x, y, z, block.count, X, Y, Z, period, half, hitSlot);
+          else if (wrapped) scanShifted(x, y, z, block.count, X, Y, Z, shift[0], shift[1], shift[2], hitSlot);
+          else scanBlock(x, y, z, block.count, X, Y, Z, hitSlot);
+          visit.add(hits);
+          continue;
+        }
+
         auto visitSlot = [&] (const size_t k, const double dist_sq) { visit(first, k, dist_sq); };
 
         if (end) {
@@ -533,6 +604,7 @@ void meshsearch::MeshGrid::walkPlain (const std::array<unsigned int, 3>& target,
                                       Threshold&& threshold, Visit&& visit) const
 {
   constexpr bool rules = WholeRules<std::decay_t<Visit>>::value;
+  constexpr bool tally = Tally<std::decay_t<Visit>>::value;
 
   const int targetX = static_cast<int>(target[0]);
   const int targetY = static_cast<int>(target[1]);
@@ -575,8 +647,14 @@ void meshsearch::MeshGrid::walkPlain (const std::array<unsigned int, 3>& target,
         }
         else if (block.count == 0 || cellBeyond(faces, currX, currY, currZ, X, Y, Z, threshold())) continue;
         const size_t first = block.start;
-        scanBlock(m_X.data()+first, m_Y.data()+first, m_Z.data()+first, block.count, X, Y, Z,
-                  [&] (const size_t k, const double dist_sq) { visit(first, k, dist_sq); });
+        if constexpr (tally) {
+          size_t hits = 0;
+          scanBlock(m_X.data()+first, m_Y.data()+first, m_Z.data()+first, block.count, X, Y, Z,
+                    [&] (const size_t k, const double dist_sq) { if (visit.hit(first, k, dist_sq)) ++hits; });
+          visit.add(hits);
+        }
+        else scanBlock(m_X.data()+first, m_Y.data()+first, m_Z.data()+first, block.count, X, Y, Z,
+                       [&] (const size_t k, const double dist_sq) { visit(first, k, dist_sq); });
       }
     }
   }

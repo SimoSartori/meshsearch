@@ -15,9 +15,7 @@ std::size_t meshsearch::MeshGrid::countRules (const std::array<unsigned int, 3>&
   std::size_t count = 0;
   walk(target, X, Y, Z, Rmin, [&] { return Rmax_sq; },
        wholeVisit(wholeTest(Rmax, Rmin, m_cellsize),
-                  [&] (const size_t first, const size_t k, const double dist_sq) {
-                    if ((!Exclude || first+k != self) && dist_sq <= Rmax_sq && dist_sq >= Rmin_sq) ++count;
-                  },
+                  CountVisit<Exclude>(count, self, Rmax_sq, Rmin_sq),
                   [&] (const size_t first, const size_t n) {
                     count += (Exclude && self-first < n) ? n-1 : n;
                   }));
