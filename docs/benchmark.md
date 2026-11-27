@@ -269,12 +269,14 @@ points and 1 *s*, with 10,077,696 cells, this is 353 MiB for the objects and
 at least 1,076 MiB for the cells, about 1.4 GiB. At 4 *s* the 157,464 cells
 take about 17 MiB in addition to the same 353 MiB.
 
-Construction needs more while it runs: a temporary cell index of 8 bytes per
-object (76 MiB at 10⁷) and, from Python, a copy of the three coordinate
-arrays, 24 bytes per object (229 MiB). Both are freed when the grid is built,
-but the allocator may retain them in the process. This is why the tables
-report about 700 MiB for the grid of 10⁷ points at 4 *s*; a C++ program
-building the same grid grew by 455 MiB. The grid is built compact, with no
+When these tables were measured, construction needed more while it ran: a
+temporary cell index of 8 bytes per object (76 MiB at 10⁷) and, from Python,
+a copy of the three coordinate arrays, 24 bytes per object (229 MiB). Both
+were freed when the grid was built, but the allocator may retain them in the
+process. This is why the tables report about 700 MiB for the grid of 10⁷
+points at 4 *s*; a C++ program building the same grid grew by 455 MiB. The
+current version needs neither: construction allocates only the grid, and
+float64 C-contiguous arrays are read from Python where they are. The grid is built compact, with no
 capacity reserved for later additions.
 
 The growth of the resident size is not the allocation, and it varies between

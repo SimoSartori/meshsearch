@@ -9,9 +9,23 @@
   `meshsearch::Workers` in C++ (`Workers(-1)` for every available core), the
   keyword-only `workers=` in Python. The default is one, as before. Results
   and their order do not depend on it.
+- Constructors from plain arrays: `MeshGrid(X, Y, Z, n, cellsize)` from
+  three pointers to `n` coordinates each, and `MeshGrid(XYZ, n, cellsize)`
+  from one pointer to `n` interleaved points x0 y0 z0 x1 y1 z1 ..., each
+  also with `Options`. In Python, `MeshGrid(pos, cellsize, *, limits=None,
+  periodic=False)` takes the points as an array of shape (N, 3). Every form
+  builds the grid the vector constructor builds from the same values, with
+  the same results in the same order, and keeps no reference to the
+  caller's arrays.
 
 ### Changed
 
+- Construction no longer allocates a temporary cell index of 8 bytes per
+  object; its peak memory is now that of the grid it builds.
+- In Python, the constructor reads float64 C-contiguous coordinate arrays
+  where they are instead of copying them: 24 bytes per object less at the
+  peak, and faster. Other inputs are converted, and accepted or refused, as
+  before.
 - Radius queries (`closeObjects`, `countObjects`) skip in bulk the cells of
   each shell that cannot hold a result, instead of testing them one by one.
   The gain is largest at radii close to a multiple of the cell side.

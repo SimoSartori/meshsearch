@@ -14,6 +14,8 @@ coordinate arrays of a batch of query points; `index` is one object index and
 | C++ | Python | what it is |
 |---|---|---|
 | `MeshGrid(X, Y, Z, cellsize)`, `MeshGrid(X, Y, Z, cellsize, options)` | `MeshGrid(x, y, z, cellsize, *, limits=None, periodic=False)` | C++ passes limits and periodic axes in a `MeshGrid::Options` |
+| `MeshGrid(pX, pY, pZ, n, cellsize)`, `MeshGrid(pX, pY, pZ, n, cellsize, options)` | — | the same from three pointers to `n` coordinates each |
+| `MeshGrid(pXYZ, n, cellsize)`, `MeshGrid(pXYZ, n, cellsize, options)` | `MeshGrid(pos, cellsize, *, limits=None, periodic=False)` | the same from `n` points as rows x, y, z: one pointer to `3n` doubles, an `(N, 3)` array |
 | `MeshGrid()` | — | an empty grid, to assign to later |
 | `get_nObjects()` | `len(grid)` | objects in the grid, removed ones excluded |
 | `get_lims()` | `grid.lims` | the box; a 3×2 array in Python |
