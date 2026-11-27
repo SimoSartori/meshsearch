@@ -132,6 +132,12 @@ if (MESHSEARCH_BUILD_TESTS)
 
   add_test(NAME workers COMMAND test_workers)
 
+  add_executable(test_constructors tests/test_constructors.cpp)
+  target_link_libraries(test_constructors PRIVATE meshsearch)
+  target_compile_options(test_constructors PRIVATE ${MESHSEARCH_PRIVATE_OPTIONS})
+
+  add_test(NAME constructors COMMAND test_constructors)
+
   if (MESHSEARCH_BUILD_EXAMPLES)
     add_test(NAME example COMMAND example)
     add_test(NAME example_periodic COMMAND example_periodic)
