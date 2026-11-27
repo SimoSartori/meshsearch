@@ -6,13 +6,18 @@ them. Everything applies to both languages unless stated otherwise; the
 
 ## Points, indices and the box
 
-A grid is built from three coordinate arrays of equal length (vectors in C++,
-any array-like in Python), a cell side, and optionally the limits of the box.
-The coordinates are copied into the grid. The library prescribes no unit:
+A grid is built from the coordinates of the points, a cell side, and
+optionally the limits of the box. The coordinates come either as three arrays
+of equal length, one per axis, or as one array of points, x, y and z for each
+in turn: in C++, three vectors, three pointers with a count, or one pointer to
+*n* interleaved triples; in Python, three array-likes, or one of shape
+(N, 3). Every form builds the same grid from the same values, with the same
+results in the same order. The coordinates are copied into the grid, which
+keeps no reference to the caller's arrays. The library prescribes no unit:
 coordinates, the cell side and every radius must be in the same one.
 
 An *object* is a point held by the grid, and its *index* is its position in
-the arrays passed to the constructor. Indices are stable for the life of the
+the arrays passed to the constructor, or its row in an array of points. Indices are stable for the life of the
 grid: removing an object leaves its index permanently invalid, adding one
 issues a new index, and no index is reused or renumbered.
 
@@ -393,9 +398,12 @@ cells, about 1.4 GiB; at two mean separations there are an eighth as many
 cells. Empty cells cost the same as full ones, which matters on clustered
 data.
 
-Construction needs more for a while: a temporary cell index of 8 bytes per
-object, and in Python a copy of the three coordinate arrays (24 bytes per
-object), 76 and 229 MiB at ten million objects. Both are freed when the
+Construction allocates nothing beyond the grid itself. In Python, float64
+C-contiguous arrays, which is what numpy creates by default, are read where
+they are. Any other input is converted first, which costs a temporary 8 bytes
+per object for each converted coordinate array: a float32 array, a list, or
+the columns of an (N, 3) array, which are strided; pass such an array whole,
+as `MeshGrid(pos, cellsize)`, to read it in place. The copy is freed when the
 constructor returns, but the allocator may retain the memory in the process.
 The growth of the process therefore varies between runs; the
 [performance page](benchmark.md#memory) gives the measurements.
