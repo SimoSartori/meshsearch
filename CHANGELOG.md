@@ -14,6 +14,11 @@
   memory; the gain is largest on clustered data.
 - With Clang, `nearestObject` is about twice as fast on clustered data and
   slightly slower on uniform data; with GCC it is unchanged.
+- With GCC, `countObjects` is up to about three times faster on clustered
+  data; with Clang it is unchanged.
+- Large index batches of `countObjects` and `closeObjects` walk each cell's
+  neighbourhood once for all the queries in that cell; the gain is largest
+  on clustered data.
 
 Results and their order are unchanged by all of the above. Measured
 timings are in the benchmark page.
