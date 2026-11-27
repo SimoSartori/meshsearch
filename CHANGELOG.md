@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- Every batch form of `nearestObject`, `nearestObjects`, `closeObjects` and
+  `countObjects` takes a number of worker threads as its last argument:
+  `meshsearch::Workers` in C++ (`Workers(-1)` for every available core), the
+  keyword-only `workers=` in Python. The default is one, as before. Results
+  and their order do not depend on it.
+
 ### Changed
 
 - Radius queries (`closeObjects`, `countObjects`) skip in bulk the cells of
