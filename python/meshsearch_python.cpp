@@ -11,6 +11,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
+#include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
@@ -186,6 +187,109 @@ namespace {
     if (p.x.size() != p.y.size() || p.x.size() != p.z.size())
       throw meshsearch::Error("the query coordinate arrays differ in length");
     return p;
+  }
+
+  // Constructor coordinates, which the grid copies during the call. An array
+  // already laid out as the C++ constructor reads it, float64 and
+  // C-contiguous, is read where it is, through the buffer protocol or
+  // DLPack. Any other numpy array of real numbers or bools is converted by
+  // numpy in one pass. Anything else, a list or an object array for
+  // instance, goes through nanobind's sequence conversion, the one the
+  // constructor has always used, so that what it accepts and refuses is
+  // unchanged; a shape it cannot take is a TypeError, as it always was.
+  using Column = nb::ndarray<nb::ro, double, nb::ndim<1>, nb::c_contig, nb::device::cpu>;
+  using Rows = nb::ndarray<nb::ro, double, nb::shape<-1, 3>, nb::c_contig, nb::device::cpu>;
+
+  struct Coords {
+    nb::object held;
+    const double* in_place = nullptr;
+    std::vector<double> converted;
+    size_t points = 0;
+    const double* data () const { return held.is_valid() ? in_place : converted.data(); }
+  };
+
+  // A numpy array whose values numpy itself converts to float64 exactly as
+  // the sequence conversion would, element by element.
+  bool numpyReal (const nb::handle& a)
+  {
+    if (!nb::isinstance(a, nb::module_::import_("numpy").attr("ndarray"))) return false;
+    const char kind = kindOf(nb::borrow(a));
+    return kind == 'f' || kind == 'i' || kind == 'u' || kind == 'b';
+  }
+
+  nb::object asFloat64 (const nb::handle& a)
+  {
+    return nb::module_::import_("numpy").attr("ascontiguousarray")(a, "dtype"_a = "float64");
+  }
+
+  Coords readColumn (const nb::handle& argument, const char* name)
+  {
+    const std::string wanted = std::string(name)+" must be a one-dimensional array of real numbers";
+    nb::object source = nb::borrow(argument);
+    Column column;
+    if (numpyReal(source)) {
+      if (nb::cast<size_t>(source.attr("ndim")) != 1) throw nb::type_error(wanted.c_str());
+      if (!nb::try_cast(source, column, false)) source = asFloat64(source);
+    }
+    Coords c;
+    if (nb::try_cast(source, column, false)) {
+      c.held = source;
+      c.in_place = column.data();
+      c.points = column.shape(0);
+      return c;
+    }
+    if (!nb::try_cast(source, c.converted, true)) throw nb::type_error(wanted.c_str());
+    c.points = c.converted.size();
+    return c;
+  }
+
+  Coords readRows (const nb::handle& argument)
+  {
+    const char* const wanted = "pos must be an array of real numbers of shape (N, 3)";
+    nb::object source = nb::borrow(argument);
+    Rows rows;
+    if (numpyReal(source)) {
+      if (nb::cast<size_t>(source.attr("ndim")) != 2 || nb::cast<size_t>(source.attr("shape")[nb::int_(1)]) != 3)
+        throw nb::type_error(wanted);
+      if (!nb::try_cast(source, rows, false)) source = asFloat64(source);
+    }
+    Coords c;
+    if (nb::try_cast(source, rows, false)) {
+      c.held = source;
+      c.in_place = rows.data();
+      c.points = rows.shape(0);
+      return c;
+    }
+    std::vector<std::array<double, 3>> triples;
+    if (!nb::try_cast(source, triples, true)) throw nb::type_error(wanted);
+    c.converted.resize(3*triples.size());
+    for (size_t i=0; i<triples.size(); ++i)
+      for (size_t a=0; a<3; ++a) c.converted[3*i+a] = triples[i][a];
+    c.points = triples.size();
+    return c;
+  }
+
+  // The keywords both constructor forms share.
+  meshsearch::MeshGrid::Options readOptions (const std::optional<std::vector<std::vector<double>>>& limits,
+                                             const nb::object& periodic)
+  {
+    meshsearch::MeshGrid::Options options;
+    if (isBool(periodic)) {
+      options.periodic.fill(flag(periodic));
+    }
+    else {
+      if (!nb::isinstance<nb::sequence>(periodic) || nb::isinstance<nb::str>(periodic) || nb::len(periodic) != 3)
+        throw nb::type_error("periodic must be a bool or a sequence of three bools");
+      for (size_t a=0; a<3; ++a) options.periodic[a] = flag(periodic[nb::int_(a)]);
+    }
+    if (limits) {
+      if (limits->size() != 3 || (*limits)[0].size() != 2 || (*limits)[1].size() != 2 || (*limits)[2].size() != 2)
+        throw meshsearch::Error("the limits matrix must be 3x2");
+      std::array<std::array<double,2>,3> box;
+      for (int a=0; a<3; ++a) box[a] = {(*limits)[a][0], (*limits)[a][1]};
+      options.limits = box;
+    }
+    return options;
   }
 
   // A batched call fails where the single-point call would, naming the query
@@ -462,7 +566,8 @@ NB_MODULE(meshsearch, m)
 
   nb::class_<meshsearch::MeshGrid>(m, "MeshGrid",
       "Uniform cubic mesh over a set of points, for neighbour queries.\n\n"
-      "Objects are identified by their position in the coordinate arrays.\n"
+      "Objects are identified by their position in the coordinate arrays,\n"
+      "or by their row in pos.\n"
       "Indices are stable: remove_object leaves an index permanently invalid,\n"
       "add_object issues a new one, and indices are never reused. Every member\n"
       "taking an index raises meshsearch.IndexError on one that is negative, out\n"
@@ -479,34 +584,28 @@ NB_MODULE(meshsearch, m)
 
     .def("__init__",
          [](meshsearch::MeshGrid* self,
-            const std::vector<double>& x,
-            const std::vector<double>& y,
-            const std::vector<double>& z,
+            const nb::handle& x,
+            const nb::handle& y,
+            const nb::handle& z,
             const double cellsize,
             const std::optional<std::vector<std::vector<double>>>& limits,
             const nb::object& periodic) {
-           meshsearch::MeshGrid::Options options;
-           if (isBool(periodic)) {
-             options.periodic.fill(flag(periodic));
-           }
-           else {
-             if (!nb::isinstance<nb::sequence>(periodic) || nb::isinstance<nb::str>(periodic) || nb::len(periodic) != 3)
-               throw nb::type_error("periodic must be a bool or a sequence of three bools");
-             for (size_t a=0; a<3; ++a) options.periodic[a] = flag(periodic[nb::int_(a)]);
-           }
-           if (limits) {
-             if (limits->size() != 3 || (*limits)[0].size() != 2 || (*limits)[1].size() != 2 || (*limits)[2].size() != 2)
-               throw meshsearch::Error("the limits matrix must be 3x2");
-             std::array<std::array<double,2>,3> box;
-             for (int a=0; a<3; ++a) box[a] = {(*limits)[a][0], (*limits)[a][1]};
-             options.limits = box;
-           }
-           new (self) meshsearch::MeshGrid(x, y, z, cellsize, options);
+           const Coords X = readColumn(x, "x"), Y = readColumn(y, "y"), Z = readColumn(z, "z");
+           const meshsearch::MeshGrid::Options options = readOptions(limits, periodic);
+           if (X.points != Y.points || X.points != Z.points)
+             throw meshsearch::Error("the coordinate vectors differ in length");
+           new (self) meshsearch::MeshGrid(X.data(), Y.data(), Z.data(), X.points, cellsize, options);
          },
          "x"_a, "y"_a, "z"_a, "cellsize"_a, nb::kw_only(),
          "limits"_a = nb::none(), "periodic"_a = false,
-         "Build the grid over the points x, y, z, arrays of equal length that\n"
-         "are copied into the grid. Coordinates, cellsize and every radius\n"
+         "Build the grid over the points x, y, z, one-dimensional arrays of\n"
+         "equal length; object i is the point (x[i], y[i], z[i]). The grid\n"
+         "copies the coordinates and keeps no reference to the arrays. A\n"
+         "float64 C-contiguous array is read where it is; any other\n"
+         "array-like of real numbers, a float32 array, a strided column or a\n"
+         "list for instance, is converted first, which costs a temporary copy.\n"
+         "For points held as rows, use MeshGrid(pos, cellsize) instead.\n\n"
+         "Coordinates, cellsize and every radius\n"
          "must be in the same unit. cellsize is the cell side, the one tuning\n"
          "parameter: for uniform data, start between 1.5 and 2.5 mean\n"
          "separations, the mean separation being (volume / number of points)\n"
@@ -536,8 +635,34 @@ NB_MODULE(meshsearch, m)
          "is missing, the period is below 2**-1000 or the limits too large to\n"
          "shift by it, or the period is not an integer multiple of the\n"
          "shortest. TypeError if periodic is neither a bool nor three bools,\n"
-         "or the coordinates are not real numbers. MemoryError if the grid\n"
-         "cannot be allocated.")
+         "or the coordinates are not one-dimensional arrays of real numbers.\n"
+         "MemoryError if the grid cannot be allocated.")
+
+    .def("__init__",
+         [](meshsearch::MeshGrid* self,
+            const nb::handle& pos,
+            const double cellsize,
+            const std::optional<std::vector<std::vector<double>>>& limits,
+            const nb::object& periodic) {
+           const Coords P = readRows(pos);
+           const meshsearch::MeshGrid::Options options = readOptions(limits, periodic);
+           new (self) meshsearch::MeshGrid(P.data(), P.points, cellsize, options);
+         },
+         "pos"_a, "cellsize"_a, nb::kw_only(),
+         "limits"_a = nb::none(), "periodic"_a = false,
+         "Build the grid over the points pos, an array of shape (N, 3): object\n"
+         "i is the point pos[i] = (x, y, z). The grid copies the coordinates\n"
+         "and keeps no reference to the array, and is the grid\n"
+         "MeshGrid(pos[:, 0], pos[:, 1], pos[:, 2], cellsize) builds, with the\n"
+         "same results in the same order. A float64 C-contiguous array, the\n"
+         "usual layout of an (N, 3) numpy array, is read where it is; any\n"
+         "other array-like of real numbers of that shape, a float32 or a\n"
+         "Fortran-ordered array or a list of triples for instance, is\n"
+         "converted first, which costs a temporary copy.\n\n"
+         "cellsize, limits and periodic are those of MeshGrid(x, y, z,\n"
+         "cellsize), and so are the errors, except that the coordinates cannot\n"
+         "differ in length: TypeError if pos is not an array of real numbers\n"
+         "of shape (N, 3).")
 
     .def("__len__", &meshsearch::MeshGrid::get_nObjects,
          "Number of objects in the grid, excluding removed ones.")
